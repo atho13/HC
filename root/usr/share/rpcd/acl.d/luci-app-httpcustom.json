@@ -1,0 +1,14 @@
+{
+	"luci-app-httpcustom": {
+		"description": "Grant UCI and log file access for HTTP Custom",
+		"read": {
+			"uci": [ "httpcustom" ],
+			"file": {
+				"/var/log/httpcustom.log": [ "read" ]
+			}
+		},
+		"write": {
+			"uci": [ "httpcustom" ]
+		}
+	}
+}
