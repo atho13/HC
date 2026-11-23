@@ -45,6 +45,9 @@ define Package/luci-app-httpcustom/install
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) ./root/usr/share/luci/menu.d/httpcustom.json $(1)/usr/share/luci/menu.d/
 
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-httpcustom.json $(1)/usr/share/rpcd/acl.d/
+
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/httpcustom
 	$(INSTALL_DATA) ./htdocs/luci-static/resources/view/httpcustom/logs.js $(1)/www/luci-static/resources/view/httpcustom/
 	$(INSTALL_DATA) ./htdocs/luci-static/resources/view/httpcustom/main.js $(1)/www/luci-static/resources/view/httpcustom/
