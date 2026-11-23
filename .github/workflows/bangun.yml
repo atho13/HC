@@ -15,19 +15,19 @@ jobs:
           # 1. aarch64 - IPK (OpenWrt 24.10.8)
           - arch: aarch64_generic
             format: ipk
-            base_url: https://downloads.openwrt.org/releases/24.10.8/targets/armsr/armv8/
+            base_url: https://downloads.openwrt.org/releases/24.10.8/targets/armsr/armv8/openwrt-sdk-24.10.8-armsr-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst
           # 2. aarch64 - APK (OpenWrt 25.12.6)
           - arch: aarch64_generic
             format: apk
-            base_url: https://downloads.openwrt.org/releases/25.12.6/targets/armsr/armv8/
+            base_url: https://downloads.openwrt.org/releases/25.12.6/targets/armsr/armv8/openwrt-sdk-25.12.6-armsr-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst
           # 3. x86_64 - IPK (OpenWrt 24.10.8)
           - arch: x86_64
             format: ipk
-            base_url: https://downloads.openwrt.org/releases/24.10.8/targets/x86/64/
+            base_url: https://downloads.openwrt.org/releases/24.10.8/targets/x86/generic/openwrt-sdk-24.10.8-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
           # 4. x86_64 - APK (OpenWrt 25.12.6)
           - arch: x86_64
             format: apk
-            base_url: https://downloads.openwrt.org/releases/25.12.6/targets/x86/64/
+            base_url: https://downloads.openwrt.org/releases/25.12.6/targets/x86/generic/openwrt-sdk-25.12.6-x86-generic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
 
 
     steps:
