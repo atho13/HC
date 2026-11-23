@@ -12,23 +12,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 1. aarch64 - IPK (OpenWrt 24.10.8)
-          - arch: aarch64_generic
-            format: ipk
-            base_url: https://downloads.openwrt.org/releases/24.10.8/targets/armsr/armv8/openwrt-sdk-24.10.8-armsr-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          # 2. aarch64 - APK (OpenWrt 25.12.6)
-          - arch: aarch64_generic
-            format: apk
-            base_url: https://downloads.openwrt.org/releases/25.12.6/targets/armsr/armv8/openwrt-sdk-25.12.6-armsr-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-          # 3. x86_64 - IPK (OpenWrt 24.10.8)
-          - arch: x86_64
-            format: ipk
-            base_url: https://downloads.openwrt.org/releases/24.10.8/targets/x86/generic/openwrt-sdk-24.10.8-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          # 4. x86_64 - APK (OpenWrt 25.12.6)
-          - arch: x86_64
-            format: apk
-            base_url: https://downloads.openwrt.org/releases/25.12.6/targets/x86/generic/openwrt-sdk-25.12.6-x86-generic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-
+          - name: "aarch64-ipk-24.10.8"
+            sdk_url: "https://openwrt.org"
+          - name: "aarch64-apk-25.12.6"
+            sdk_url: "https://openwrt.org"
+          - name: "x86_64-ipk-24.10.8"
+            sdk_url: "https://openwrt.org"
+          - name: "x86_64-apk-25.12.6"
+            sdk_url: "https://openwrt.org"
 
     steps:
     - name: Checkout Code
@@ -41,18 +32,11 @@ jobs:
 
     - name: Fetch OpenWrt SDK (${{ matrix.name }})
       run: |
-        BASE_URL="${{ matrix.url }}"
-        echo "Fetching sha256sums from $BASE_URL..."
+        SDK_URL="${{ matrix.sdk_url }}"
+        SDK_FILE=$(basename "$SDK_URL")
         
-        SDK_FILE=$(curl -fsSL "$BASE_URL/sha256sums" | grep "openwrt-sdk-" | grep -E "\.tar\.(xz|zst)" | awk '{print $2}' | sed 's/\*//g' | head -n 1)
-        
-        if [ -z "$SDK_FILE" ]; then
-          echo "Fatal Error: Cannot resolve SDK filename from $BASE_URL"
-          exit 1
-        fi
-        
-        echo "Downloading $BASE_URL/$SDK_FILE..."
-        wget -q "$BASE_URL/$SDK_FILE"
+        echo "Downloading $SDK_URL..."
+        wget -q "$SDK_URL" -O "$SDK_FILE"
         tar -xf "$SDK_FILE"
         mv openwrt-sdk-*/ openwrt-sdk/
 
