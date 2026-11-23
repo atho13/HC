@@ -4,7 +4,7 @@ PKG_NAME:=luci-app-httpcustom
 PKG_VERSION:=1.2.0
 PKG_RELEASE:=1
 
-PKG_MAINTAINER:=frdmx
+PKG_MAINTAINER:=Frdmx-Wrt
 PKG_LICENSE:=MIT
 
 include $(INCLUDE_DIR)/package.mk
