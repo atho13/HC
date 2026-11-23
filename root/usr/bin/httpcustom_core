@@ -2,9 +2,10 @@
 # HTTP Custom Core Engine - Explicit Protocol Routing
 
 LOG_FILE="/var/log/httpcustom.log"
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> $LOG_FILE; }
+: > "$LOG_FILE"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"; }
 
-# 1. อ่านค่าจาก UCI Configuration
+# 1. Baca konfigurasi UCI
 ENABLED=$(uci -q get httpcustom.main.enabled)
 [ "$ENABLED" != "1" ] && exit 0
 
@@ -18,35 +19,47 @@ SNI=$(uci -q get httpcustom.@profile[0].sni)
 log "Starting HTTP Custom Core..."
 log "Target: $SERVER:$PORT | Protocol: $PROTO | Mode: $MODE"
 
-# 2. Kernel & Hardware Optimization สำหรับ ARM64
-# ขยายขนาด TCP Buffer มารองรับ Throughput ระดับ 5G และลดภาระ CPU
-sysctl -w net.ipv4.tcp_rmem="8192 262144 33554432" >/dev/null
-sysctl -w net.ipv4.tcp_wmem="8192 262144 33554432" >/dev/null
-sysctl -w net.ipv4.tcp_mtu_probing=1 >/dev/null
+# 2. Optimasi Kernel TCP
+sysctl -w net.ipv4.tcp_rmem="8192 262144 33554432" >/dev/null 2>&1
+sysctl -w net.ipv4.tcp_wmem="8192 262144 33554432" >/dev/null 2>&1
+sysctl -w net.ipv4.tcp_mtu_probing=1 >/dev/null 2>&1
 
-# 3. Protocol Routing Logic (การสร้างท่อ)
+# 3. Protocol Routing Logic
 if [ "$PROTO" = "ssh" ]; then
     USER=$(uci -q get httpcustom.@profile[0].username)
     PASS=$(uci -q get httpcustom.@profile[0].password)
     
     if [ "$MODE" = "payload" ]; then
         log "Starting Payload Injector (Local Port 8989)..."
-        # สั่งรัน Python Injector ไว้เบื้องหลัง
-        python3 /usr/bin/httpcustom_payload.py "$SERVER" "$PORT" "$PAYLOAD" &
+        python3 /usr/bin/httpcustom_payload.py "$SERVER" "$PORT" "$PAYLOAD" >> "$LOG_FILE" 2>&1 &
         sleep 2
-        log "Connecting SSH via Injector..."
-        # เชื่อมต่อ SSH ผ่าน Injector ภายในเครื่อง (No Magic)
-        sshpass -p "$PASS" ssh -o ProxyCommand="nc 127.0.0.1 8989" -N -D 1080 "$USER@$SERVER" &
+        log "Connecting SSH via Injector (SOCKS5 Port 1080)..."
+        exec sshpass -p "$PASS" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -o ProxyCommand="nc 127.0.0.1 8989" \
+            -N -D 0.0.0.0:1080 "$USER@$SERVER" >> "$LOG_FILE" 2>&1
+    else
+        log "Connecting Direct SSH (SOCKS5 Port 1080)..."
+        exec sshpass -p "$PASS" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -N -D 0.0.0.0:1080 -p "$PORT" "$USER@$SERVER" >> "$LOG_FILE" 2>&1
     fi
 
 elif [ "$PROTO" = "vless" ]; then
     UUID=$(uci -q get httpcustom.@profile[0].uuid)
-    log "Generating Xray Configuration for VLESS+SNI Bug Host ($SNI)..."
+    log "Generating Xray Configuration for VLESS+SNI ($SNI)..."
     
-    # สร้างไฟล์ Config ของ Xray แบบ Explicit JSON
     cat > /tmp/xray_custom.json <<EOF
 {
-  "inbounds": [{"port": 1080, "listen": "127.0.0.1", "protocol": "socks"}],
+  "inbounds": [
+    {"port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": {"udp": true}}
+  ],
   "outbounds": [{
     "protocol": "vless",
     "settings": { "vnext": [{ "address": "$SERVER", "port": $PORT, "users": [{"id": "$UUID", "encryption": "none"}] }] },
@@ -59,8 +72,9 @@ elif [ "$PROTO" = "vless" ]; then
   }]
 }
 EOF
-    log "Starting Xray Core..."
-    xray run -c /tmp/xray_custom.json &
+    log "Starting Xray Core (SOCKS5 Port 1080)..."
+    exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
+else
+    log "Error: Unknown protocol '$PROTO'"
+    exit 1
 fi
-
-log "Tunnel established. Redirection active."
