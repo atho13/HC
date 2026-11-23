@@ -1,62 +1,112 @@
-'use strict';
-'use ui';
+#!/bin/sh
+# HTTP Custom Core Engine - Synced with LuCI main.js
 
-var form = require('form');
-var view = require('view');
-var uci = require('uci');
+LOG_FILE="/var/log/httpcustom.log"
+: > "$LOG_FILE"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"; }
 
-return view.extend({
-	load: function() {
-		return Promise.all([ L.resolveDefault(uci.load('httpcustom'), {}) ]);
-	},
+# 1. Baca konfigurasi UCI (menggunakan indeks @profile[0] sesuai TypedSection di main.js)
+ENABLED=$(uci -q get httpcustom.main.enabled)
+[ "$ENABLED" != "1" ] && exit 0
 
-	render: function(data) {
-		var m, s, o;
+PROTO=$(uci -q get httpcustom.@profile[0].proto)
+MODE=$(uci -q get httpcustom.@profile[0].mode)
+SERVER=$(uci -q get httpcustom.@profile[0].server)
+PORT=$(uci -q get httpcustom.@profile[0].port)
+USER=$(uci -q get httpcustom.@profile[0].username)
+PASS=$(uci -q get httpcustom.@profile[0].password)
+PAYLOAD=$(uci -q get httpcustom.@profile[0].payload)
+SNI=$(uci -q get httpcustom.@profile[0].sni)
 
-		m = new form.Map('httpcustom', _('HTTP Custom Tunnel'), _('Multi-protocol tunneling and injection client.'));
+log "Starting HTTP Custom Core..."
+log "Target: $SERVER:$PORT | Protocol: $PROTO | Mode: $MODE"
 
-		s = m.section(form.NamedSection, 'main', 'global', _('Global Settings'));
-		s.anonymous = true;
-		o = s.option(form.Flag, 'enabled', _('Enable Service'));
-		o.rmempty = false;
+# 2. Optimasi Kernel TCP
+sysctl -w net.ipv4.tcp_rmem="8192 262144 33554432" >/dev/null 2>&1
+sysctl -w net.ipv4.tcp_wmem="8192 262144 33554432" >/dev/null 2>&1
+sysctl -w net.ipv4.tcp_mtu_probing=1 >/dev/null 2>&1
 
-		s = m.section(form.TypedSection, 'profile', _('Tunnel Configurations'));
-		s.anonymous = true;
-		s.addremove = true;
+# 3. Protocol & Mode Routing Logic
+if [ "$PROTO" = "ssh" ]; then
+    if [ "$MODE" = "payload" ]; then
+        log "Starting HTTP Payload Injector (127.0.0.1:8989)..."
+        python3 -u /usr/bin/httpcustom_payload.py "$SERVER" "$PORT" "$PAYLOAD" >> "$LOG_FILE" 2>&1 &
+        sleep 2
+        log "Connecting SSH via Payload Injector (SOCKS5 0.0.0.0:1080)..."
+        exec sshpass -p "$PASS" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -o ProxyCommand="nc 127.0.0.1 8989" \
+            -N -D 0.0.0.0:1080 "$USER@$SERVER" >> "$LOG_FILE" 2>&1
 
-		o = s.option(form.ListValue, 'proto', _('Protocol'));
-		o.value('ssh', 'SSH Tunnel');
-		o.value('vless', 'VLESS (Xray)');
-		o.value('ovpn', 'OpenVPN');
-		o.default = 'ssh';
+    elif [ "$MODE" = "ssl" ]; then
+        log "Starting Stunnel SSL/TLS with SNI ($SNI) on 127.0.0.1:8990..."
+        cat > /tmp/stunnel_custom.conf <<EOF
+foreground = yes
+client = yes
+[ssh-tls]
+accept = 127.0.0.1:8990
+connect = $SERVER:$PORT
+sni = ${SNI:-$SERVER}
+EOF
+        stunnel /tmp/stunnel_custom.conf >> "$LOG_FILE" 2>&1 &
+        sleep 2
+        log "Connecting SSH via SSL/TLS Tunnel (SOCKS5 0.0.0.0:1080)..."
+        exec sshpass -p "$PASS" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -N -D 0.0.0.0:1080 -p 8990 "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1
 
-		// เพิ่ม Connection Mode สำหรับจัดกลุ่มวิธีเชื่อมต่อ
-		o = s.option(form.ListValue, 'mode', _('Connection Mode'));
-		o.value('direct', 'Direct (ต่อตรง)');
-		o.value('payload', 'HTTP Payload Injector');
-		o.value('ssl', 'SSL/TLS (SNI)');
-		o.default = 'payload';
+    else
+        log "Connecting Direct SSH (SOCKS5 0.0.0.0:1080)..."
+        exec sshpass -p "$PASS" ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -N -D 0.0.0.0:1080 -p "$PORT" "$USER@$SERVER" >> "$LOG_FILE" 2>&1
+    fi
 
-		o = s.option(form.Value, 'server', _('Server Host / IP'));
-		o.rmempty = false; o.datatype = 'host';
+elif [ "$PROTO" = "vless" ]; then
+    # Di main.js, UUID disimpan di opsi 'password'
+    UUID="$PASS"
+    log "Generating Xray Configuration for VLESS+WS+TLS (SNI: ${SNI:-$SERVER})..."
+    
+    cat > /tmp/xray_custom.json <<EOF
+{
+  "inbounds": [
+    {"port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": {"udp": true}}
+  ],
+  "outbounds": [{
+    "protocol": "vless",
+    "settings": { "vnext": [{ "address": "$SERVER", "port": $PORT, "users": [{"id": "$UUID", "encryption": "none"}] }] },
+    "streamSettings": {
+      "network": "ws",
+      "security": "tls",
+      "tlsSettings": { "serverName": "${SNI:-$SERVER}", "allowInsecure": true },
+      "wsSettings": { "path": "/" }
+    }
+  }]
+}
+EOF
+    log "Starting Xray Core (SOCKS5 0.0.0.0:1080)..."
+    exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
 
-		o = s.option(form.Value, 'port', _('Port'));
-		o.rmempty = false; o.datatype = 'port';
-
-		o = s.option(form.Value, 'username', _('Username'));
-		o.depends('proto', 'ssh'); o.depends('proto', 'ovpn');
-
-		o = s.option(form.Value, 'password', _('Password / UUID'));
-		o.password = true;
-
-		o = s.option(form.Value, 'payload', _('Payload'));
-		o.depends('mode', 'payload');
-		o.placeholder = 'GET http://bug.com/ HTTP/1.1\\r\\nHost: bug.com\\r\\n\\r\\n';
-
-		o = s.option(form.Value, 'sni', _('SNI Bug Host'));
-		o.depends('mode', 'ssl');
-		o.depends('proto', 'vless');
-
-		return m.render();
-	}
-});
+elif [ "$PROTO" = "ovpn" ]; then
+    log "Starting OpenVPN Client..."
+    if [ -f "/etc/httpcustom/client.ovpn" ]; then
+        printf "%s\n%s\n" "$USER" "$PASS" > /tmp/ovpn_auth.txt
+        chmod 600 /tmp/ovpn_auth.txt
+        exec openvpn --config /etc/httpcustom/client.ovpn --remote "$SERVER" "$PORT" --auth-user-pass /tmp/ovpn_auth.txt >> "$LOG_FILE" 2>&1
+    else
+        log "Error: /etc/httpcustom/client.ovpn not found!"
+        exit 1
+    fi
+else
+    log "Error: Unknown protocol '$PROTO'"
+    exit 1
+fi
