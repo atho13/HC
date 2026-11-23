@@ -15,7 +15,7 @@ define Package/luci-app-httpcustom
   SUBMENU:=3. Applications
   TITLE:=HTTP Custom Multi-Protocol Tunnel
   PKGARCH:=all
-  DEPENDS:=+luci-base +python3-light +stunnel +openvpn-openssl +xray-core +kmod-tcp-bbr +iptables-mod-conntrack-extra
+  DEPENDS:=+luci-base +python3-light +stunnel +openvpn-openssl +xray-core +sshpass +openssh-client +kmod-tcp-bbr +iptables-nft +iptables-mod-ipopt +iptables-mod-conntrack-extra
 endef
 
 define Package/luci-app-httpcustom/conffiles
