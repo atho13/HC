@@ -13,13 +13,17 @@ jobs:
       matrix:
         include:
           - name: "aarch64-ipk-24.10.8"
-            sdk_url: "https://openwrt.org"
+            ver: "24.10.8"
+            target: "armsr/armv8"
           - name: "aarch64-apk-25.12.6"
-            sdk_url: "https://openwrt.org"
+            ver: "25.12.6"
+            target: "armsr/armv8"
           - name: "x86_64-ipk-24.10.8"
-            sdk_url: "https://openwrt.org"
+            ver: "24.10.8"
+            target: "x86/64"
           - name: "x86_64-apk-25.12.6"
-            sdk_url: "https://openwrt.org"
+            ver: "25.12.6"
+            target: "x86/64"
 
     steps:
     - name: Checkout Code
@@ -32,11 +36,20 @@ jobs:
 
     - name: Fetch OpenWrt SDK (${{ matrix.name }})
       run: |
-        SDK_URL="${{ matrix.sdk_url }}"
-        SDK_FILE=$(basename "$SDK_URL")
+        HOST="downloads.openwrt.org"
+        DIR="releases/${{ matrix.ver }}/targets/${{ matrix.target }}"
+        BASE="https://${HOST}/${DIR}"
         
-        echo "Downloading $SDK_URL..."
-        wget -q "$SDK_URL" -O "$SDK_FILE"
+        echo "Checking $BASE ..."
+        SDK_FILE=$(curl -fsSL "${BASE}/sha256sums" | grep "openwrt-sdk-" | grep -E "\.tar\.(xz|zst)" | awk '{print $2}' | sed 's/\*//g' | head -n 1)
+        
+        if [ -z "$SDK_FILE" ]; then
+          echo "Error: SDK file tidak ditemukan di $BASE"
+          exit 1
+        fi
+        
+        echo "Downloading $SDK_FILE ..."
+        wget -q "${BASE}/${SDK_FILE}"
         tar -xf "$SDK_FILE"
         mv openwrt-sdk-*/ openwrt-sdk/
 
