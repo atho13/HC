@@ -70,6 +70,7 @@ define Package/luci-app-frdmxtunnel/install
 	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_stat $(1)/usr/bin/
 	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_watchdog $(1)/usr/bin/
 	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_ctrl $(1)/usr/bin/
+	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_rules.py $(1)/usr/bin/
 
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) ./root/usr/share/luci/menu.d/frdmxtunnel.json $(1)/usr/share/luci/menu.d/
@@ -84,6 +85,8 @@ define Package/luci-app-frdmxtunnel/install
 	$(INSTALL_DIR) $(1)/root/frdmxtunnel
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cores/zivpn $(1)/root/frdmxtunnel/zivpn
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cores/qssh $(1)/root/frdmxtunnel/qssh
+	$(INSTALL_DATA) ./root/root/frdmxtunnel/geosite.dat $(1)/root/frdmxtunnel/geosite.dat
+	$(INSTALL_DATA) ./root/root/frdmxtunnel/geoip.dat $(1)/root/frdmxtunnel/geoip.dat
 endef
 
 define Package/luci-app-frdmxtunnel/postinst
