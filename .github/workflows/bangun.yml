@@ -1,4 +1,4 @@
-name: Build HTTPCustom (Amlogic aarch64 & x86_64)
+name: Build FRDMX Tunnnel (Amlogic aarch64 & x86_64)
 
 on:
   push:
@@ -55,8 +55,8 @@ jobs:
 
     - name: Prepare Package & Update Feeds
       run: |
-        mkdir -p openwrt-sdk/package/luci-app-httpcustom
-        rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-httpcustom/
+        mkdir -p openwrt-sdk/package/luci-app-frdmxtunnel
+        rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-frdmxtunnel/
         
         cd openwrt-sdk
         ./scripts/feeds update -a
@@ -66,11 +66,11 @@ jobs:
     - name: Compile Package
       run: |
         cd openwrt-sdk
-        make package/luci-app-httpcustom/compile V=s
+        make package/luci-app-frdmxtunnel/compile V=s
 
     - name: Upload Artifact (${{ matrix.name }})
       uses: actions/upload-artifact@v4
       with:
         name: luci-app-httpcustom-${{ matrix.name }}
-        path: openwrt-sdk/bin/packages/**/luci-app-httpcustom*.*pk
+        path: openwrt-sdk/bin/packages/**/luci-app-frdmxtunnel*.*pk
         retention-days: 7
