@@ -1,10 +1,12 @@
-name: Build FRDMX Tunnnel (Amlogic aarch64 & x86_64)
+name: Build FRDMX Tunnnel
 
+#on:
+  #push:
+    #branches: [ main, master ]
+  #workflow_dispatch:
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
-
+  
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -78,6 +80,6 @@ jobs:
     - name: Upload Artifact (${{ matrix.name }})
       uses: actions/upload-artifact@v4
       with:
-        name: luci-app-httpcustom-${{ matrix.name }}
+        name: luci-app-frdmxtunnel-${{ matrix.name }}
         path: openwrt-sdk/bin/packages/**/luci-app-frdmxtunnel*.*pk
         retention-days: 7
