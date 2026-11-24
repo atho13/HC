@@ -1,0 +1,256 @@
+#!/bin/sh
+. /lib/functions.sh
+LOG_FILE="/tmp/frdmxtunnel.log"
+: > "$LOG_FILE"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"; }
+
+config_load frdmxtunnel
+config_get_bool ENABLED main enabled 0
+[ "$ENABLED" -ne 1 ] && exit 0
+
+config_get DNS_PRIMARY main dns_server "1.1.1.1"
+DNS_FALLBACK="8.8.8.8"
+[ "$DNS_PRIMARY" = "8.8.8.8" ] && DNS_FALLBACK="1.1.1.1"
+
+PROFILES=""
+collect_profiles() { PROFILES="$PROFILES $1"; }
+config_foreach collect_profiles profile
+
+if [ -z "$PROFILES" ]; then
+    log "Error: Tidak ada profil konfigurasi. Silakan tambah profil di LuCI."
+    exit 1
+fi
+
+ACTIVE_IDX=$(cat /tmp/frdmxtunnel_active_idx 2>/dev/null || echo 1)
+TARGET_CFG=$(echo "$PROFILES" | awk -v idx="$ACTIVE_IDX" '{print $idx}')
+if [ -z "$TARGET_CFG" ]; then
+    ACTIVE_IDX=1
+    TARGET_CFG=$(echo "$PROFILES" | awk '{print $1}')
+fi
+echo "$ACTIVE_IDX" > /tmp/frdmxtunnel_active_idx
+
+config_get PROTO "$TARGET_CFG" proto
+config_get MODE "$TARGET_CFG" mode
+config_get XRAY_MODE "$TARGET_CFG" xray_mode
+config_get TLS_SEC "$TARGET_CFG" tls
+config_get SERVER "$TARGET_CFG" server
+config_get PORT "$TARGET_CFG" port
+config_get PORT_RANGE "$TARGET_CFG" port_range
+config_get USER "$TARGET_CFG" username
+config_get PASS "$TARGET_CFG" password
+config_get PAYLOAD "$TARGET_CFG" payload
+config_get SNI "$TARGET_CFG" sni
+config_get WS_HOST "$TARGET_CFG" ws_host
+config_get WS_PATH "$TARGET_CFG" path
+config_get NS_DOMAIN "$TARGET_CFG" ns_domain
+config_get PUBKEY "$TARGET_CFG" pubkey
+config_get DNS_RESOLVER "$TARGET_CFG" dns_resolver
+config_get OBFS_KEY "$TARGET_CFG" obfs
+config_get WAN_IF "$TARGET_CFG" wan_if ""
+[ -n "$WAN_IF" ] && IF_JSON="\"interface\": \"$WAN_IF\", " || IF_JSON=""
+[ -n "$WAN_IF" ] && SSH_BIND="-B $WAN_IF" || SSH_BIND=""
+
+NETWORK="ws"
+[ "$XRAY_MODE" = "ws_none" ] && TLS_SEC="none"
+[ "$XRAY_MODE" = "tcp_tls" ] && { NETWORK="tcp"; TLS_SEC="tls"; }
+[ "$XRAY_MODE" = "ws_tls" ] && TLS_SEC="tls"
+
+[ -z "$TLS_SEC" ] && TLS_SEC="tls"
+[ -z "$WS_PATH" ] && WS_PATH="/"
+[ -z "$PORT_RANGE" ] && PORT_RANGE="6000-19999"
+[ -z "$DNS_RESOLVER" ] && DNS_RESOLVER="1.1.1.1:53"
+[ -z "$OBFS_KEY" ] && OBFS_KEY='hu``hqb`c'
+FINAL_SNI="${SNI:-$SERVER}"
+FINAL_WS_HOST="${WS_HOST:-$FINAL_SNI}"
+
+log "Starting Frdmx Tunnel Core (Profile #$ACTIVE_IDX)..."
+log "Target: $SERVER | Protocol: $PROTO | Mode: ${XRAY_MODE:-${MODE:-default}}"
+
+sysctl -w net.ipv4.tcp_rmem="8192 262144 33554432" >/dev/null 2>&1
+sysctl -w net.ipv4.tcp_wmem="8192 262144 33554432" >/dev/null 2>&1
+sysctl -w net.ipv4.tcp_mtu_probing=1 >/dev/null 2>&1
+
+setup_firewall() {
+    nft delete table inet frdmxtunnel 2>/dev/null
+    iptables -t nat -D PREROUTING -i br-lan -j FRDMXTUNNEL 2>/dev/null
+    iptables -t nat -D OUTPUT -j FRDMXTUNNEL_OUT 2>/dev/null
+    iptables -t nat -F FRDMXTUNNEL 2>/dev/null
+    iptables -t nat -X FRDMXTUNNEL 2>/dev/null
+    iptables -t nat -F FRDMXTUNNEL_OUT 2>/dev/null
+    iptables -t nat -X FRDMXTUNNEL_OUT 2>/dev/null
+
+    if command -v nft >/dev/null 2>&1; then
+        nft -f - <<NFT_EOF
+table inet frdmxtunnel {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname "br-lan" udp dport 53 redirect to :5353
+        iifname "br-lan" tcp dport 53 redirect to :5353
+        iifname "br-lan" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
+        iifname "br-lan" tcp dport 1-65535 redirect to :12345
+    }
+    chain output {
+        type nat hook output priority -100; policy accept;
+        meta mark 0xff return
+        ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
+        tcp dport 1-65535 redirect to :12345
+    }
+}
+NFT_EOF
+    fi
+    killall -9 frdmxtunnel_watchdog 2>/dev/null
+    /usr/bin/frdmxtunnel_watchdog >/dev/null 2>&1 &
+}
+find_bin() {
+    [ -x "/root/frdmxtunnel/$1" ] && echo "/root/frdmxtunnel/$1" && return
+    [ -x "/usr/bin/$1" ] && echo "/usr/bin/$1" && return
+    command -v "$1" 2>/dev/null
+}
+
+if [ "$PROTO" = "ssh" ]; then
+    if [ "$MODE" = "slowdns" ]; then
+        QSSH_BIN=$(find_bin qssh)
+        if [ -z "$QSSH_BIN" ]; then
+            log "Error: Binary qssh tidak ditemukan di /usr/bin/ atau /root/libernet/core/"
+            exit 1
+        fi
+        log "Starting SlowDNS via QSSH ($NS_DOMAIN -> $DNS_RESOLVER)..."
+        cat > /tmp/qssh_custom.json <<QSSH_EOF
+{
+  "ssh": { "host": "$SERVER", "ip": "$SERVER", "port": ${PORT:-22}, "username": "$USER", "password": "$PASS" },
+  "network": { "type": "dns" },
+  "dns": { "nameserver": "$DNS_RESOLVER", "target_domain": "$NS_DOMAIN", "pubkey": "$PUBKEY", "query_type": "TXT" },
+  "transport": { "tls": false, "host": "", "path": "/", "sni": "" },
+  "proxy": { "enable": false, "host": "", "port": 0 },
+  "payload": { "enable": false, "request": "", "expect": [] },
+  "concurrency": { "workers": 1, "start_port": 1080 }
+}
+QSSH_EOF
+        "$QSSH_BIN" --dial /tmp/qssh_custom.json >> "$LOG_FILE" 2>&1 &
+        sleep 3
+    elif [ "$MODE" = "payload" ]; then
+        python3 -u /usr/bin/frdmxtunnel_payload.py "$SERVER" "$PORT" "$PAYLOAD" >> "$LOG_FILE" 2>&1 &
+        sleep 2
+        sshpass -p "$PASS" ssh $SSH_BIND -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="nc 127.0.0.1 8989" -N -D 0.0.0.0:1080 "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
+    elif [ "$MODE" = "ssl" ]; then
+        printf "foreground = yes\nclient = yes\n[ssh-tls]\naccept = 127.0.0.1:8990\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom.conf
+        stunnel /tmp/stunnel_custom.conf >> "$LOG_FILE" 2>&1 &
+        sleep 2
+        sshpass -p "$PASS" ssh $SSH_BIND -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:1080 -p 8990 "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1 &
+    elif [ "$MODE" = "ssl_payload" ]; then
+        printf "foreground = yes\nclient = yes\n[ssh-wss]\naccept = 127.0.0.1:8990\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom.conf
+        stunnel /tmp/stunnel_custom.conf >> "$LOG_FILE" 2>&1 &
+        sleep 2
+        python3 -u /usr/bin/frdmxtunnel_payload.py "127.0.0.1" "8990" "$PAYLOAD" >> "$LOG_FILE" 2>&1 &
+        sleep 2
+        sshpass -p "$PASS" ssh $SSH_BIND -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="nc 127.0.0.1 8989" -N -D 0.0.0.0:1080 "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
+    else
+        sshpass -p "$PASS" ssh $SSH_BIND -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:1080 -p "$PORT" "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
+    fi
+
+    cat > /tmp/xray_custom.json <<XRAY_SSH_EOF
+{
+  "log": { "loglevel": "error", "access": "none" },
+  "inbounds": [
+    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls"] } },
+    { "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "$DNS_PRIMARY", "port": 53, "network": "tcp,udp" } }
+  ],
+  "outbounds": [
+    { "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1080 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } }
+  ]
+}
+XRAY_SSH_EOF
+    config_get BLOCK_ADS main block_ads 0
+    config_get BLOCK_PORN main block_porn 0
+    config_get DIRECT_BANK main direct_bank 0
+    config_get ROUTE_GAME main route_game proxy
+    config_get ROUTE_STREAM main route_stream proxy
+    config_get ROUTE_CONF main route_conf proxy
+    BLOCK_ADS="$BLOCK_ADS" BLOCK_PORN="$BLOCK_PORN" DIRECT_BANK="$DIRECT_BANK" ROUTE_GAME="$ROUTE_GAME" ROUTE_STREAM="$ROUTE_STREAM" ROUTE_CONF="$ROUTE_CONF" /usr/bin/frdmxtunnel_rules.py
+    setup_firewall
+    [ -f /root/frdmxtunnel/geosite.dat ] && export XRAY_LOCATION_ASSET=/root/frdmxtunnel; exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
+
+elif [ "$PROTO" = "zivpn" ]; then
+    ZIVPN_BIN=$(find_bin zivpn)
+    if [ -z "$ZIVPN_BIN" ]; then
+        log "Error: Binary zivpn tidak ditemukan di /root/frdmxtunnel/"
+        exit 1
+    fi
+    log "Starting ZiVPN UDP High-Speed (4x Workers + Observatory)..."
+    for P in 1081 1082 1083 1084; do
+        ZIVPN_CFG="{\"server\":\"${SERVER}:${PORT_RANGE}\",\"obfs\":\"${OBFS_KEY}\",\"auth\":\"${PASS}\",\"socks5\":{\"listen\":\"127.0.0.1:${P}\"},\"insecure\":true,\"recvwindowconn\":65536,\"recvwindow\":262144,\"disable_mtu_discovery\":true,\"resolver\":\"${DNS_RESOLVER}\",\"down_mbps\":100,\"up_mbps\":25}"
+        "$ZIVPN_BIN" -s "$OBFS_KEY" --config "$ZIVPN_CFG" >> "$LOG_FILE" 2>&1 &
+    done
+    sleep 2
+
+    cat > /tmp/xray_custom.json <<XRAY_ZI_EOF
+{
+  "log": { "loglevel": "error", "access": "none" },
+  "observatory": {
+    "subjectSelector": ["zi-"],
+    "probeURL": "http://gstatic.com",
+    "probeInterval": "15s"
+  },
+  "inbounds": [
+    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls"] } },
+    { "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "$DNS_PRIMARY", "port": 53, "network": "tcp,udp" } }
+  ],
+  "outbounds": [
+    { "tag": "zi-1", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1081 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } },
+    { "tag": "zi-2", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1082 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } },
+    { "tag": "zi-3", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1083 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } },
+    { "tag": "zi-4", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1084 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } }
+  ],
+  "routing": {
+    "balancers": [{ "tag": "zi-bal", "selector": ["zi-"], "strategy": { "type": "leastPing" } }],
+    "rules": [{ "type": "field", "network": "tcp,udp", "balancerTag": "zi-bal" }]
+  }
+}
+XRAY_ZI_EOF
+    config_get BLOCK_ADS main block_ads 0
+    config_get BLOCK_PORN main block_porn 0
+    config_get DIRECT_BANK main direct_bank 0
+    config_get ROUTE_GAME main route_game proxy
+    config_get ROUTE_STREAM main route_stream proxy
+    config_get ROUTE_CONF main route_conf proxy
+    BLOCK_ADS="$BLOCK_ADS" BLOCK_PORN="$BLOCK_PORN" DIRECT_BANK="$DIRECT_BANK" ROUTE_GAME="$ROUTE_GAME" ROUTE_STREAM="$ROUTE_STREAM" ROUTE_CONF="$ROUTE_CONF" /usr/bin/frdmxtunnel_rules.py
+    setup_firewall
+    [ -f /root/frdmxtunnel/geosite.dat ] && export XRAY_LOCATION_ASSET=/root/frdmxtunnel; exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
+
+elif [ "$PROTO" = "vless" ] || [ "$PROTO" = "vmess" ] || [ "$PROTO" = "trojan" ]; then
+    [ "$PROTO" = "vless" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"users\": [{\"id\": \"$PASS\", \"encryption\": \"none\"}] }]"
+    [ "$PROTO" = "vmess" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"users\": [{\"id\": \"$PASS\", \"alterId\": 0, \"security\": \"auto\"}] }]"
+    [ "$PROTO" = "trojan" ] && OUTBOUND_SETTINGS="\"servers\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"password\": \"$PASS\" }]"
+    [ "$TLS_SEC" = "tls" ] && TLS_BLOCK="\"tlsSettings\": { \"serverName\": \"$FINAL_SNI\", \"verifyPeerCertByName\": \"$SERVER,$FINAL_WS_HOST\" }," || TLS_BLOCK=""
+    [ "$NETWORK" = "ws" ] && NET_BLOCK="\"wsSettings\": { \"path\": \"$WS_PATH\", \"host\": \"$FINAL_WS_HOST\" }," || NET_BLOCK=""
+
+    cat > /tmp/xray_custom.json <<XRAY_EOF
+{
+  "log": { "loglevel": "error", "access": "none" },
+  "dns": { "tag": "dns-module", "servers": ["localhost", "$DNS_PRIMARY", "$DNS_FALLBACK"] },
+  "inbounds": [
+    { "port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": { "udp": true } },
+    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls"] } },
+    { "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "$DNS_PRIMARY", "port": 53, "network": "tcp,udp" } }
+  ],
+  "outbounds": [
+    { "tag": "proxy", "protocol": "$PROTO", "settings": { $OUTBOUND_SETTINGS }, "streamSettings": { "network": "$NETWORK", "security": "$TLS_SEC", $TLS_BLOCK $NET_BLOCK "sockopt": { ${IF_JSON}"mark": 255, "tcpNoDelay": true } } },
+    { "tag": "direct", "protocol": "freedom", "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } }
+  ],
+  "routing": { "domainStrategy": "AsIs", "rules": [ { "type": "field", "inboundTag": ["dns-module"], "outboundTag": "direct" } ] }
+}
+XRAY_EOF
+    config_get BLOCK_ADS main block_ads 0
+    config_get BLOCK_PORN main block_porn 0
+    config_get DIRECT_BANK main direct_bank 0
+    config_get ROUTE_GAME main route_game proxy
+    config_get ROUTE_STREAM main route_stream proxy
+    config_get ROUTE_CONF main route_conf proxy
+    BLOCK_ADS="$BLOCK_ADS" BLOCK_PORN="$BLOCK_PORN" DIRECT_BANK="$DIRECT_BANK" ROUTE_GAME="$ROUTE_GAME" ROUTE_STREAM="$ROUTE_STREAM" ROUTE_CONF="$ROUTE_CONF" /usr/bin/frdmxtunnel_rules.py
+    setup_firewall
+    log "Starting Xray Core ($NETWORK | $TLS_SEC)..."
+    [ -f /root/frdmxtunnel/geosite.dat ] && export XRAY_LOCATION_ASSET=/root/frdmxtunnel; exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
+
+elif [ "$PROTO" = "ovpn" ]; then
+    [ -f "/etc/frdmxtunnel/client.ovpn" ] && { printf "%s\n%s\n" "$USER" "$PASS" > /tmp/ovpn_auth.txt; chmod 600 /tmp/ovpn_auth.txt; exec openvpn --config /etc/frdmxtunnel/client.ovpn --remote "$SERVER" "$PORT" --auth-user-pass /tmp/ovpn_auth.txt >> "$LOG_FILE" 2>&1; } || exit 1
+fi

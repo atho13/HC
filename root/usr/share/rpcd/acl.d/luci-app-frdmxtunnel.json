@@ -1,0 +1,25 @@
+{
+	"luci-app-frdmxtunnel": {
+		"description": "Grant UCI, log, stats, and control access for Frdmx Tunnel",
+		"read": {
+			"uci": [ "frdmxtunnel" ],
+			"file": {
+				"/tmp/frdmxtunnel.log": [ "read" ],
+				"/usr/bin/frdmxtunnel_stat": [ "exec" ],
+				"/usr/bin/frdmxtunnel_ctrl": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "read", "stat", "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "frdmxtunnel" ],
+			"file": {
+				"/tmp/frdmxtunnel.log": [ "write" ]
+			},
+			"ubus": {
+				"file": [ "write" ]
+			}
+		}
+	}
+}

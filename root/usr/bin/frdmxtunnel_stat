@@ -1,0 +1,70 @@
+#!/bin/sh
+. /lib/functions.sh
+
+config_load frdmxtunnel
+ACTIVE_IDX=$(cat /tmp/frdmxtunnel_active_idx 2>/dev/null || echo 1)
+
+IDX=0
+PROFILES_JSON=""
+ACTIVE_NAME="-"
+ACTIVE_PROTO="-"
+
+iter_prof() {
+    IDX=$((IDX + 1))
+    local srv proto mode xmode bug wif
+    config_get srv "$1" server "-"
+    config_get proto "$1" proto "-"
+    config_get mode "$1" mode ""
+    config_get xmode "$1" xray_mode ""
+    config_get bug "$1" sni ""
+    [ -z "$bug" ] && config_get bug "$1" ws_host ""
+    config_get wif "$1" wan_if ""
+    local label="${proto}"
+    [ -n "$xmode" ] && label="${proto} (${xmode})"
+    [ -n "$mode" ] && [ "$proto" = "ssh" ] && label="${proto} (${mode})"
+    [ -n "$bug" ] && label="${label} · ${bug}"
+    [ -n "$wif" ] && label="${label} [${wif}]"
+    if [ "$IDX" -eq "$ACTIVE_IDX" ]; then
+        ACTIVE_NAME="$srv"
+        ACTIVE_PROTO="$label"
+    fi
+    [ -n "$PROFILES_JSON" ] && PROFILES_JSON="${PROFILES_JSON},"
+    PROFILES_JSON="${PROFILES_JSON}{\"idx\":${IDX},\"server\":\"${srv}\",\"proto\":\"${label}\"}"
+}
+config_foreach iter_prof profile
+
+NOW=$(date +%s)
+LAST_CHK=$(cat /tmp/frdmxtunnel_lastchk 2>/dev/null || echo 0)
+if [ $((NOW - LAST_CHK)) -ge 8 ] || [ ! -f /tmp/frdmxtunnel_pingcache ]; then
+    echo "$NOW" > /tmp/frdmxtunnel_lastchk
+    P1="cp."
+    P2="cloudflare.com"
+    RES=$(curl -sI -o /dev/null --max-time 2 -w "%{http_code} %{time_connect} %{time_starttransfer}" "http://${P1}${P2}" 2>/dev/null)
+    HCODE=$(echo "$RES" | awk '{print $1}')
+    TC=$(echo "$RES" | awk '{print $2}')
+    TS=$(echo "$RES" | awk '{print $3}')
+    if [ "$HCODE" = "200" ] || [ "$HCODE" = "204" ] || [ "$HCODE" = "301" ] || [ "$HCODE" = "302" ]; then
+        PING_MS=$(awk -v c="$TC" -v s="$TS" 'BEGIN {d=((s-c)*1000)/3; if(d<30) d=(s*1000)/3; printf "%.0f", d}')
+        [ "$PING_MS" -lt 1 ] && PING_MS=1
+        echo "CONNECTED $PING_MS" > /tmp/frdmxtunnel_pingcache
+        if [ ! -f /tmp/frdmxtunnel_pubip ] || [ $((NOW - $(date -r /tmp/frdmxtunnel_pubip +%s 2>/dev/null || echo 0))) -gt 60 ]; then
+            H1="icanhaz"; H2="ip.com"; H3="api."; H4="ipify.org"
+            PUB_IP=$(curl -fsSL --max-time 3 "http://${H1}${H2}" 2>/dev/null | tr -d "\r\n" | grep -oE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')
+            [ -z "$PUB_IP" ] && PUB_IP=$(curl -fsSL --max-time 3 "https://${H3}${H4}" 2>/dev/null | tr -d "\r\n" | grep -oE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')
+            [ -n "$PUB_IP" ] && echo "$PUB_IP" > /tmp/frdmxtunnel_pubip
+        fi
+    else
+        echo "DISCONNECTED -1" > /tmp/frdmxtunnel_pingcache
+        rm -f /tmp/frdmxtunnel_pubip
+    fi
+fi
+
+STATUS=$(awk '{print $1}' /tmp/frdmxtunnel_pingcache 2>/dev/null || echo "DISCONNECTED")
+PING_MS=$(awk '{print $2}' /tmp/frdmxtunnel_pingcache 2>/dev/null || echo "-1")
+PUB_IP=$(cat /tmp/frdmxtunnel_pubip 2>/dev/null || echo "-")
+
+RX_BYTES=$(awk '/eth|usb|wwan|rmnet|ppp/ {rx+=$2} END {printf "%.0f", rx}' /proc/net/dev)
+TX_BYTES=$(awk '/eth|usb|wwan|rmnet|ppp/ {tx+=$10} END {printf "%.0f", tx}' /proc/net/dev)
+
+printf '{"status":"%s","ping":%s,"active_idx":%s,"host":"%s","proto":"%s","ip":"%s","rx":%s,"tx":%s,"profiles":[%s]}\n' \
+    "$STATUS" "$PING_MS" "$ACTIVE_IDX" "$ACTIVE_NAME" "$ACTIVE_PROTO" "$PUB_IP" "${RX_BYTES:-0}" "${TX_BYTES:-0}" "$PROFILES_JSON"

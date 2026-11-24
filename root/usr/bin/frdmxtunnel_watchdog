@@ -1,0 +1,26 @@
+#!/bin/sh
+FAIL_COUNT=0
+while true; do
+    sleep 15
+    ENABLED=$(uci -q get frdmxtunnel.main.enabled)
+    [ "$ENABLED" != "1" ] && continue
+
+    if curl -s -o /dev/null --max-time 3 http://gstatic.com; then
+        FAIL_COUNT=0
+    else
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        if [ "$FAIL_COUNT" -ge 2 ]; then
+            FAIL_COUNT=0
+            TOTAL=$(uci show frdmxtunnel | grep -c "=profile$")
+            if [ "$TOTAL" -gt 1 ]; then
+                CURR=$(cat /tmp/frdmxtunnel_active_idx 2>/dev/null || echo 1)
+                NEXT=$((CURR + 1))
+                [ "$NEXT" -gt "$TOTAL" ] && NEXT=1
+                echo "$NEXT" > /tmp/frdmxtunnel_active_idx
+                echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Koneksi terputus! Beralih otomatis ke Profil/Bug #$NEXT..." >> /tmp/frdmxtunnel.log
+                /etc/init.d/frdmxtunnel restart >/dev/null 2>&1 &
+                exit 0
+            fi
+        fi
+    fi
+done

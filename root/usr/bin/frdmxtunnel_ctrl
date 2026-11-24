@@ -1,0 +1,32 @@
+#!/bin/sh
+case "$1" in
+    start)
+        uci set frdmxtunnel.main.enabled='1'
+        uci commit frdmxtunnel
+        /etc/init.d/frdmxtunnel start >/dev/null 2>&1 &
+        ;;
+    stop)
+        uci set frdmxtunnel.main.enabled='0'
+        uci commit frdmxtunnel
+        /etc/init.d/frdmxtunnel stop >/dev/null 2>&1
+        ;;
+    restart)
+        rm -f /tmp/frdmxtunnel_pubip
+        uci set frdmxtunnel.main.enabled='1'
+        uci commit frdmxtunnel
+        /etc/init.d/frdmxtunnel restart >/dev/null 2>&1 &
+        ;;
+    switch)
+        if [ -n "$2" ]; then
+            echo "$2" > /tmp/frdmxtunnel_active_idx
+            rm -f /tmp/frdmxtunnel_pubip
+            uci set frdmxtunnel.main.enabled='1'
+            uci commit frdmxtunnel
+            /etc/init.d/frdmxtunnel restart >/dev/null 2>&1 &
+        fi
+        ;;
+    clearlog)
+        : > /tmp/frdmxtunnel.log
+        ;;
+esac
+echo "OK"
