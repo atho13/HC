@@ -9,12 +9,29 @@ PKG_LICENSE:=MIT
 
 include $(INCLUDE_DIR)/package.mk
 
+# Mapping ARCH untuk download core otomatis saat compile
+ifneq ($(findstring x86_64,$(ARCH)),)
+  Q_ARCH:=amd64
+  Z_ARCH:=amd64
+else ifneq ($(findstring aarch64,$(ARCH)),)
+  Q_ARCH:=arm64
+  Z_ARCH:=arm64
+else ifneq ($(findstring arm,$(ARCH)),)
+  Q_ARCH:=armv7
+  Z_ARCH:=arm
+else
+  Q_ARCH:=amd64
+  Z_ARCH:=amd64
+endif
+
+ZIVPN_VER:=udp-zivpn_1.4.9
+QSSH_VER:=v0.1.2
+
 define Package/luci-app-frdmxtunnel
   SECTION:=luci
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=Frdmx Tunnel Multi-Protocol Client
-  PKGARCH:=all
   DEPENDS:=+luci-base +curl +ca-bundle +python3-light +stunnel +openvpn-openssl +xray-core +sshpass +openssh-client +iptables-nft +kmod-tun +kmod-tcp-bbr
 endef
 
@@ -23,6 +40,10 @@ define Package/luci-app-frdmxtunnel/conffiles
 endef
 
 define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)/cores
+	curl -fL "https://github.com/zahidbd2/udp-zivpn/releases/download/$(ZIVPN_VER)/udp-zivpn-linux-$(Z_ARCH)" -o $(PKG_BUILD_DIR)/cores/zivpn
+	curl -fL "https://github.com/QcomWrt/Q-SSH-WORKER/releases/download/$(QSSH_VER)/Q-SSH-WORKER-linux-$(Q_ARCH)" -o $(PKG_BUILD_DIR)/cores/qssh
+	chmod +x $(PKG_BUILD_DIR)/cores/zivpn $(PKG_BUILD_DIR)/cores/qssh
 endef
 
 define Build/Configure
@@ -56,12 +77,13 @@ define Package/luci-app-frdmxtunnel/install
 	$(INSTALL_DATA) ./htdocs/luci-static/resources/view/frdmxtunnel/main.js $(1)/www/luci-static/resources/view/frdmxtunnel/
 
 	$(INSTALL_DIR) $(1)/root/frdmxtunnel
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cores/zivpn $(1)/root/frdmxtunnel/zivpn
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cores/qssh $(1)/root/frdmxtunnel/qssh
 endef
 
 define Package/luci-app-frdmxtunnel/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
-	mkdir -p /root/frdmxtunnel
 	rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/
 	/etc/init.d/frdmxtunnel enable >/dev/null 2>&1
 	/etc/init.d/rpcd restart >/dev/null 2>&1
