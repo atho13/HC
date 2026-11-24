@@ -1,6 +1,6 @@
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=luci-app-httpcustom
+PKG_NAME:=luci-app-frdmxtunnel
 PKG_VERSION:=1.2.0
 PKG_RELEASE:=1
 
@@ -9,17 +9,17 @@ PKG_LICENSE:=MIT
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/luci-app-httpcustom
+define Package/luci-app-frdmxtunnel
   SECTION:=luci
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
-  TITLE:=HTTP Custom Multi-Protocol Tunnel
+  TITLE:=Frdmx Tunnel Multi-Protocol Client
   PKGARCH:=all
   DEPENDS:=+luci-base +curl +ca-bundle +python3-light +stunnel +openvpn-openssl +xray-core +sshpass +openssh-client +iptables-nft +kmod-tun +kmod-tcp-bbr
 endef
 
-define Package/luci-app-httpcustom/conffiles
-/etc/config/httpcustom
+define Package/luci-app-frdmxtunnel/conffiles
+/etc/config/frdmxtunnel
 endef
 
 define Build/Prepare
@@ -31,47 +31,51 @@ endef
 define Build/Compile
 endef
 
-define Package/luci-app-httpcustom/install
+define Package/luci-app-frdmxtunnel/install
 	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) ./root/etc/config/httpcustom $(1)/etc/config/
+	$(INSTALL_CONF) ./root/etc/config/frdmxtunnel $(1)/etc/config/
 
 	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) ./root/etc/init.d/httpcustom $(1)/etc/init.d/
+	$(INSTALL_BIN) ./root/etc/init.d/frdmxtunnel $(1)/etc/init.d/
 
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) ./root/usr/bin/httpcustom_core $(1)/usr/bin/
-	$(INSTALL_BIN) ./root/usr/bin/httpcustom_payload.py $(1)/usr/bin/
-	$(INSTALL_BIN) ./root/usr/bin/httpcustom_stat $(1)/usr/bin/
-	$(INSTALL_BIN) ./root/usr/bin/httpcustom_watchdog $(1)/usr/bin/
+	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_core $(1)/usr/bin/
+	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_payload.py $(1)/usr/bin/
+	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_stat $(1)/usr/bin/
+	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_watchdog $(1)/usr/bin/
+	$(INSTALL_BIN) ./root/usr/bin/frdmxtunnel_ctrl $(1)/usr/bin/
 
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
-	$(INSTALL_DATA) ./root/usr/share/luci/menu.d/httpcustom.json $(1)/usr/share/luci/menu.d/
+	$(INSTALL_DATA) ./root/usr/share/luci/menu.d/frdmxtunnel.json $(1)/usr/share/luci/menu.d/
 
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
-	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-httpcustom.json $(1)/usr/share/rpcd/acl.d/
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-frdmxtunnel.json $(1)/usr/share/rpcd/acl.d/
 
-	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/httpcustom
-	$(INSTALL_DATA) ./htdocs/luci-static/resources/view/httpcustom/logs.js $(1)/www/luci-static/resources/view/httpcustom/
-	$(INSTALL_DATA) ./htdocs/luci-static/resources/view/httpcustom/main.js $(1)/www/luci-static/resources/view/httpcustom/
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/frdmxtunnel
+	$(INSTALL_DATA) ./htdocs/luci-static/resources/view/frdmxtunnel/logs.js $(1)/www/luci-static/resources/view/frdmxtunnel/
+	$(INSTALL_DATA) ./htdocs/luci-static/resources/view/frdmxtunnel/main.js $(1)/www/luci-static/resources/view/frdmxtunnel/
+
+	$(INSTALL_DIR) $(1)/root/frdmxtunnel
 endef
 
-define Package/luci-app-httpcustom/postinst
+define Package/luci-app-frdmxtunnel/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
+	mkdir -p /root/frdmxtunnel
 	rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/
-	/etc/init.d/httpcustom enable >/dev/null 2>&1
+	/etc/init.d/frdmxtunnel enable >/dev/null 2>&1
 	/etc/init.d/rpcd restart >/dev/null 2>&1
 }
 exit 0
 endef
 
-define Package/luci-app-httpcustom/prerm
+define Package/luci-app-frdmxtunnel/prerm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
-	/etc/init.d/httpcustom stop >/dev/null 2>&1
-	/etc/init.d/httpcustom disable >/dev/null 2>&1
+	/etc/init.d/frdmxtunnel stop >/dev/null 2>&1
+	/etc/init.d/frdmxtunnel disable >/dev/null 2>&1
 }
 exit 0
 endef
 
-$(eval $(call BuildPackage,luci-app-httpcustom))
+$(eval $(call BuildPackage,luci-app-frdmxtunnel))
