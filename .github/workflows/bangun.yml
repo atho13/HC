@@ -69,7 +69,7 @@ jobs:
       run: |
         cd openwrt-sdk
         make package/luci-app-frdmxtunnel/compile V=sc NO_DEPS=1
-        make package/index V=sc
+        make package/index V=sc CONFIG_SIGNED_PACKAGES=n
 
     #- name: Compile Package
       #run: |
