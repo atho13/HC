@@ -72,7 +72,7 @@ jobs:
         EOF
         make defconfig
 
-      - name: Compile Package
+    - name: Compile Package
       run: |
         cd openwrt-sdk
         make package/luci-app-frdmxtunnel/clean V=sc
