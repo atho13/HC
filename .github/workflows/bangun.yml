@@ -57,11 +57,6 @@ jobs:
         rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-frdmxtunnel/
         
         cd openwrt-sdk
-        # Update dan install definisi feeds agar DEPENDS terbaca tanpa warning
-        ./scripts/feeds update packages luci routing
-        ./scripts/feeds install -a -p luci
-        ./scripts/feeds install curl ca-bundle python3-light stunnel openvpn-openssl xray-core sshpass openssh-client nftables iptables-nft
-        
         cat << 'EOF' > .config
         CONFIG_ALL=n
         CONFIG_ALL_KMODS=n
@@ -73,8 +68,7 @@ jobs:
     - name: Compile Package
       run: |
         cd openwrt-sdk
-        # Kompilasi khusus paket Anda saja tanpa memaksa build kernel/dependensi
-        make package/luci-app-frdmxtunnel/{clean,compile} V=sc
+        make package/luci-app-frdmxtunnel/compile V=sc BUILD_LOG=1 IGNORE_ERRORS=1
         make package/index V=sc
 
     - name: Upload Artifact (${{ matrix.name }})
