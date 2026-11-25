@@ -61,9 +61,6 @@ jobs:
         rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-frdmxtunnel/
         
         cd openwrt-sdk
-        ./scripts/feeds update luci
-        ./scripts/feeds install luci-base
-        
         cat << 'EOF' > .config
         CONFIG_ALL=n
         CONFIG_ALL_KMODS=n
@@ -75,7 +72,7 @@ jobs:
     - name: Compile Package
       run: |
         cd openwrt-sdk
-        make package/luci-app-frdmxtunnel/compile IGNORE_ERRORS=1 V=sc
+        make package/luci-app-frdmxtunnel/compile V=sc
         make package/index V=sc
 
     - name: Upload Artifact (${{ matrix.name }})
