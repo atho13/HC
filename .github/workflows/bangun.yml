@@ -61,21 +61,24 @@ jobs:
         rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-frdmxtunnel/
         
         cd openwrt-sdk
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        ./scripts/feeds update luci
+        ./scripts/feeds install luci-base
         
-        # Matikan build semua paket bawaan feeds agar tidak berat
-        echo "CONFIG_ALL=n" > .config
-        echo "CONFIG_ALL_KMODS=n" >> .config
-        echo "CONFIG_ALL_NONSHARED=n" >> .config
-        echo "CONFIG_PACKAGE_luci-app-frdmxtunnel=y" >> .config
+        cat << 'EOF' > .config
+        CONFIG_ALL=n
+        CONFIG_ALL_KMODS=n
+        CONFIG_ALL_NONSHARED=n
+        CONFIG_PACKAGE_luci-app-frdmxtunnel=y
+        EOF
         make defconfig
 
     - name: Compile Package
       run: |
         cd openwrt-sdk
-        # Gunakan -j$(nproc) agar memakai semua CPU runner, serta V=sc untuk log jelas
-        make package/luci-app-frdmxtunnel/compile -j$(nproc) V=sc
+        make package/luci-app-frdmxtunnel/prepare V=sc
+        make package/luci-app-frdmxtunnel/compile V=sc
+        make package/luci-app-frdmxtunnel/install V=sc
+        make package/index V=sc
 
     - name: Upload Artifact (${{ matrix.name }})
       uses: actions/upload-artifact@v4
