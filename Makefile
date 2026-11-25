@@ -46,7 +46,7 @@ define Build/Prepare
 	curl -fL "$(ZIVPN_BASE)/udp-zivpn-linux-$(Z_ARCH)" -o $(PKG_BUILD_DIR)/cores/zivpn
 	curl -fL "$(QSSH_BASE)/Q-SSH-WORKER-linux-$(Q_ARCH).zip" -o $(PKG_BUILD_DIR)/tmp_qssh/qssh.zip
 	unzip -o $(PKG_BUILD_DIR)/tmp_qssh/qssh.zip -d $(PKG_BUILD_DIR)/tmp_qssh/
-	QSSH_EXTRACTED=$$(find $(PKG_BUILD_DIR)/tmp_qssh -type f ! -name "*.zip" | head -n 1); \
+	QSSH_EXTRACTED=$$(find $(PKG_BUILD_DIR)/tmp_qssh -type f ! -name "*.zip" ! -name "*.md" ! -name "LICENSE*" | head -n 1); \
 	mv "$$QSSH_EXTRACTED" $(PKG_BUILD_DIR)/cores/qssh
 	chmod +x $(PKG_BUILD_DIR)/cores/zivpn $(PKG_BUILD_DIR)/cores/qssh
 endef
