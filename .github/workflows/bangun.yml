@@ -72,7 +72,6 @@ jobs:
         EOF
         make defconfig
 
-
     - name: Compile Package
       run: |
         cd openwrt-sdk
