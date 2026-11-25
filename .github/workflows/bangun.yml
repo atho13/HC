@@ -10,18 +10,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          #- name: "aarch64-ipk-24.10.8"
-            #ver: "24.10.8"
-            #target: "armsr/armv8"
+          - name: "aarch64-ipk-24.10.8"
+            ver: "24.10.8"
+            target: "armsr/armv8"
           #- name: "aarch64-apk-25.12.6"
             #ver: "25.12.6"
             #target: "armsr/armv8"
           - name: "x86_64-ipk-24.10.8"
             ver: "24.10.8"
             target: "x86/64"
-          - name: "x86_64-apk-25.12.6"
-            ver: "25.12.6"
-            target: "x86/64"
+          #- name: "x86_64-apk-25.12.6"
+            #ver: "25.12.6"
+            #target: "x86/64"
 
     steps:
     - name: Checkout Code
@@ -68,8 +68,14 @@ jobs:
     - name: Compile Package
       run: |
         cd openwrt-sdk
-        make package/luci-app-frdmxtunnel/compile V=sc BUILD_LOG=1 IGNORE_ERRORS=1
+        make package/luci-app-frdmxtunnel/compile V=sc NO_DEPS=1
         make package/index V=sc
+
+    #- name: Compile Package
+      #run: |
+        #cd openwrt-sdk
+        #make package/luci-app-frdmxtunnel/compile V=sc BUILD_LOG=1 IGNORE_ERRORS=1
+        #make package/index V=sc
 
     - name: Upload Artifact (${{ matrix.name }})
       uses: actions/upload-artifact@v4
