@@ -1,9 +1,5 @@
 name: Build FRDMX Tunnnel
 
-#on:
-  #push:
-    #branches: [ main, master ]
-  #workflow_dispatch:
 on:
   workflow_dispatch:
   
@@ -61,6 +57,10 @@ jobs:
         rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-frdmxtunnel/
         
         cd openwrt-sdk
+        ./scripts/feeds update packages luci routing
+        ./scripts/feeds install -a -p luci
+        ./scripts/feeds install xray-core sshpass openssh-client nftables iptables-nft
+        
         cat << 'EOF' > .config
         CONFIG_ALL=n
         CONFIG_ALL_KMODS=n
