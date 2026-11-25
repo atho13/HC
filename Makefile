@@ -34,7 +34,7 @@ define Package/luci-app-frdmxtunnel
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=Frdmx Tunnel Multi-Protocol Client
-  DEPENDS:=+luci-base +curl +ca-bundle +python3-light +stunnel +openvpn-openssl +xray-core +sshpass +openssh-client +iptables-nft +kmod-tun +kmod-tcp-bbr
+  DEPENDS:=+luci-base +curl +ca-bundle +python3-light +stunnel +openvpn-openssl +xray-core +sshpass +openssh-client +nftables +iptables-nft +kmod-nft-tproxy +kmod-tun +kmod-tcp-bbr
 endef
 
 define Package/luci-app-frdmxtunnel/conffiles

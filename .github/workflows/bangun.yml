@@ -1,10 +1,12 @@
-name: Build HTTPCustom (Amlogic aarch64 & x86_64)
+name: Build FRDMX Tunnnel
 
+#on:
+  #push:
+    #branches: [ main, master ]
+  #workflow_dispatch:
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
-
+  
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -55,22 +57,29 @@ jobs:
 
     - name: Prepare Package & Update Feeds
       run: |
-        mkdir -p openwrt-sdk/package/luci-app-httpcustom
-        rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-httpcustom/
+        mkdir -p openwrt-sdk/package/luci-app-frdmxtunnel
+        rsync -av --exclude='.github' --exclude='openwrt-sdk' --exclude='*.tar.*' . openwrt-sdk/package/luci-app-frdmxtunnel/
         
         cd openwrt-sdk
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        
+        # Matikan build semua paket bawaan feeds agar tidak berat
+        echo "CONFIG_ALL=n" > .config
+        echo "CONFIG_ALL_KMODS=n" >> .config
+        echo "CONFIG_ALL_NONSHARED=n" >> .config
+        echo "CONFIG_PACKAGE_luci-app-frdmxtunnel=y" >> .config
         make defconfig
 
     - name: Compile Package
       run: |
         cd openwrt-sdk
-        make package/luci-app-httpcustom/compile V=s
+        # Gunakan -j$(nproc) agar memakai semua CPU runner, serta V=sc untuk log jelas
+        make package/luci-app-frdmxtunnel/compile -j$(nproc) V=sc
 
     - name: Upload Artifact (${{ matrix.name }})
       uses: actions/upload-artifact@v4
       with:
-        name: luci-app-httpcustom-${{ matrix.name }}
-        path: openwrt-sdk/bin/packages/**/luci-app-httpcustom*.*pk
+        name: luci-app-frdmxtunnel-${{ matrix.name }}
+        path: openwrt-sdk/bin/packages/**/luci-app-frdmxtunnel*.*pk
         retention-days: 7
