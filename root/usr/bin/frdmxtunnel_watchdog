@@ -1,26 +1,42 @@
 #!/bin/sh
+# Beri jeda 12 detik di awal agar qssh / zivpn selesai handshake
+sleep 12
+
 FAIL_COUNT=0
+CHECK_URL="http://gstatic.com"
+
 while true; do
     sleep 15
+
+    # Skip pengecekan jika tunnel mati atau sedang proses switch/restart manual
+    [ -f "/tmp/frdmxtunnel_ctrl.lock" ] && continue
     ENABLED=$(uci -q get frdmxtunnel.main.enabled)
     [ "$ENABLED" != "1" ] && continue
 
-    if curl -s -o /dev/null --max-time 3 http://gstatic.com; then
+    # Cek koneksi internet (timeout 6 detik agar aman untuk SlowDNS)
+    if curl -s -I -o /dev/null --max-time 10 "$CHECK_URL"; then
         FAIL_COUNT=0
     else
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        if [ "$FAIL_COUNT" -ge 2 ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Ping timeout ($FAIL_COUNT/3)..." >> /tmp/frdmxtunnel.log
+
+        if [ "$FAIL_COUNT" -ge 3 ]; then
             FAIL_COUNT=0
+            # Bersihkan cache RAM router agar tidak OOM saat restart core
+            sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+
             TOTAL=$(uci show frdmxtunnel | grep -c "=profile$")
             if [ "$TOTAL" -gt 1 ]; then
                 CURR=$(cat /tmp/frdmxtunnel_active_idx 2>/dev/null || echo 1)
                 NEXT=$((CURR + 1))
                 [ "$NEXT" -gt "$TOTAL" ] && NEXT=1
-                echo "$NEXT" > /tmp/frdmxtunnel_active_idx
-                echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Koneksi terputus! Beralih otomatis ke Profil/Bug #$NEXT..." >> /tmp/frdmxtunnel.log
-                /etc/init.d/frdmxtunnel restart >/dev/null 2>&1 &
-                exit 0
+                echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Koneksi terputus! Auto-failover ke Profil #$NEXT..." >> /tmp/frdmxtunnel.log
+                /usr/bin/frdmxtunnel_ctrl switch "$NEXT" >/dev/null 2>&1
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Koneksi terputus! Auto-reconnect profil aktif..." >> /tmp/frdmxtunnel.log
+                /usr/bin/frdmxtunnel_ctrl restart >/dev/null 2>&1
             fi
+            exit 0
         fi
     fi
 done

@@ -1,28 +1,44 @@
 #!/bin/sh
+LOCK_FILE="/tmp/frdmxtunnel_ctrl.lock"
+
+cleanup_all() {
+    killall -9 frdmxtunnel_watchdog zivpn qssh stunnel xray openvpn 2>/dev/null
+    pkill -9 -f "frdmxtunnel_payload.py" 2>/dev/null
+    pkill -9 -f "sshpass.*1080" 2>/dev/null
+    nft delete table inet frdmxtunnel 2>/dev/null
+    rm -f /tmp/frdmxtunnel_pubip
+}
+
 case "$1" in
     start)
+        [ -f "$LOCK_FILE" ] && { echo "BUSY"; exit 0; }
+        touch "$LOCK_FILE"
         uci set frdmxtunnel.main.enabled='1'
         uci commit frdmxtunnel
-        /etc/init.d/frdmxtunnel start >/dev/null 2>&1 &
+        ( /etc/init.d/frdmxtunnel start >/dev/null 2>&1; rm -f "$LOCK_FILE" ) &
         ;;
     stop)
         uci set frdmxtunnel.main.enabled='0'
         uci commit frdmxtunnel
         /etc/init.d/frdmxtunnel stop >/dev/null 2>&1
+        cleanup_all
+        rm -f "$LOCK_FILE"
         ;;
     restart)
-        rm -f /tmp/frdmxtunnel_pubip
+        [ -f "$LOCK_FILE" ] && { echo "BUSY"; exit 0; }
+        touch "$LOCK_FILE"
         uci set frdmxtunnel.main.enabled='1'
         uci commit frdmxtunnel
-        /etc/init.d/frdmxtunnel restart >/dev/null 2>&1 &
+        ( /etc/init.d/frdmxtunnel stop >/dev/null 2>&1; cleanup_all; sleep 1; /etc/init.d/frdmxtunnel start >/dev/null 2>&1; rm -f "$LOCK_FILE" ) &
         ;;
     switch)
         if [ -n "$2" ]; then
+            [ -f "$LOCK_FILE" ] && { echo "BUSY"; exit 0; }
+            touch "$LOCK_FILE"
             echo "$2" > /tmp/frdmxtunnel_active_idx
-            rm -f /tmp/frdmxtunnel_pubip
             uci set frdmxtunnel.main.enabled='1'
             uci commit frdmxtunnel
-            /etc/init.d/frdmxtunnel restart >/dev/null 2>&1 &
+            ( /etc/init.d/frdmxtunnel stop >/dev/null 2>&1; cleanup_all; sleep 1; /etc/init.d/frdmxtunnel start >/dev/null 2>&1; rm -f "$LOCK_FILE" ) &
         fi
         ;;
     clearlog)

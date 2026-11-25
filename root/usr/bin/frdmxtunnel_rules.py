@@ -8,8 +8,9 @@ if not os.path.exists(cfg_path):
 with open(cfg_path, "r") as f:
     cfg = json.load(f)
 
-has_geosite = os.path.exists("/root/frdmxtunnel/geosite.dat") or os.path.exists("/usr/share/xray/geosite.dat") or os.path.exists("/usr/share/v2ray/geosite.dat")
-has_geoip = os.path.exists("/root/frdmxtunnel/geoip.dat") or os.path.exists("/usr/share/xray/geoip.dat") or os.path.exists("/usr/share/v2ray/geoip.dat")
+ASSET_DIRS = ["/root/frdmxtunnel", "/usr/share/frdmxtunnel", "/usr/share/xray", "/usr/share/v2ray"]
+has_geosite = any(os.path.exists(os.path.join(d, "geosite.dat")) for d in ASSET_DIRS)
+has_geoip = any(os.path.exists(os.path.join(d, "geoip.dat")) for d in ASSET_DIRS)
 
 block_ads = os.environ.get("BLOCK_ADS", "0") == "1"
 block_porn = os.environ.get("BLOCK_PORN", "0") == "1"
@@ -20,13 +21,19 @@ route_conf = os.environ.get("ROUTE_CONF", "proxy")
 
 tags = {o.get("tag") for o in cfg.get("outbounds", [])}
 if "direct" not in tags:
-    cfg["outbounds"].append({"tag": "direct", "protocol": "freedom", "streamSettings": {"sockopt": {"mark": 255}}})
+    cfg["outbounds"].append({
+        "tag": "direct",
+        "protocol": "freedom",
+        "streamSettings": {"sockopt": {"mark": 255}}
+    })
 if "block" not in tags:
     cfg["outbounds"].append({"tag": "block", "protocol": "blackhole"})
 
-rules = [{"type": "field", "inboundTag": ["dns-module"], "outboundTag": "direct"}]
+rules = [
+    {"type": "field", "inboundTag": ["dns-module"], "outboundTag": "direct"},
+    {"type": "field", "ip": ["geoip:private"] if has_geoip else ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"], "outboundTag": "direct"}
+]
 
-# 1. Block Ads
 if block_ads:
     ads_dom = ["geosite:category-ads-all"] if has_geosite else [
         "domain:doubleclick.net", "domain:googlesyndication.com", "domain:googleadservices.com",
@@ -34,7 +41,6 @@ if block_ads:
     ]
     rules.append({"type": "field", "domain": ads_dom, "outboundTag": "block"})
 
-# 2. Block Adult / 18+ Sites
 if block_porn:
     porn_dom = ["geosite:category-porn"] if has_geosite else [
         "keyword:porn", "keyword:xxx", "keyword:xvideos", "keyword:xnxx",
@@ -42,17 +48,18 @@ if block_porn:
     ]
     rules.append({"type": "field", "domain": porn_dom, "outboundTag": "block"})
 
-# 3. Direct M-Banking & Indonesia (.id)
 if direct_bank:
-    bank_dom = ["geosite:category-bank-id", "regexp:.*\\.id$"] if has_geosite else [
+    bank_dom = [
         "regexp:.*\\.id$", "domain:bca.co.id", "domain:klikbca.com", "domain:bri.co.id",
         "domain:bankmandiri.co.id", "domain:bni.co.id", "domain:bankbsi.co.id",
         "domain:dana.id", "domain:ovo.id", "domain:gopay.co.id", "domain:shopeepay.co.id"
     ]
+    if has_geosite:
+        bank_dom.insert(0, "geosite:id")
     rules.append({"type": "field", "domain": bank_dom, "outboundTag": "direct"})
-    rules.append({"type": "field", "ip": ["geoip:id", "geoip:private"] if has_geoip else ["geoip:private"], "outboundTag": "direct"})
+    if has_geoip:
+        rules.append({"type": "field", "ip": ["geoip:id"], "outboundTag": "direct"})
 
-# 4. Game Online Traffic
 if route_game == "direct":
     game_dom = ["geosite:category-games"] if has_geosite else [
         "domain:mobilelegends.com", "domain:youngjoygame.com", "domain:pubgmobile.com",
@@ -61,7 +68,6 @@ if route_game == "direct":
     ]
     rules.append({"type": "field", "domain": game_dom, "outboundTag": "direct"})
 
-# 5. Streaming
 if route_stream == "direct":
     stream_dom = ["geosite:youtube", "geosite:netflix", "geosite:tiktok", "geosite:disney", "geosite:spotify"] if has_geosite else [
         "domain:youtube.com", "domain:googlevideo.com", "domain:ytimg.com",
@@ -69,14 +75,24 @@ if route_stream == "direct":
     ]
     rules.append({"type": "field", "domain": stream_dom, "outboundTag": "direct"})
 
-# 6. Video Conference
 if route_conf == "direct":
     conf_dom = ["geosite:zoom", "geosite:google-meet", "geosite:microsoft"] if has_geosite else [
-        "domain:zoom.us", "domain:zoomgov.com", "domain:meet.google.com",
-        "domain:teams.microsoft.com", "domain:webex.com"
+        "domain:zoom.us", "domain:zoomgov.com", "domain:://google.com",
+        "domain:://microsoft.com", "domain:webex.com"
     ]
     rules.append({"type": "field", "domain": conf_dom, "outboundTag": "direct"})
 
-cfg["routing"] = {"domainStrategy": "IPIfNonMatch", "rules": rules}
+# Pertahankan balancers (seperti zi-bal pada ZiVPN) jika sudah ada
+existing_routing = cfg.get("routing", {})
+balancers = existing_routing.get("balancers", [])
+
+if balancers:
+    rules.append({"type": "field", "network": "tcp,udp", "balancerTag": balancers[0]["tag"]})
+    cfg["routing"] = {"domainStrategy": "IPIfNonMatch", "balancers": balancers, "rules": rules}
+else:
+    main_proxy_tag = next((o["tag"] for o in cfg.get("outbounds", []) if o.get("tag") not in ("direct", "block")), "proxy")
+    rules.append({"type": "field", "network": "tcp,udp", "outboundTag": main_proxy_tag})
+    cfg["routing"] = {"domainStrategy": "IPIfNonMatch", "rules": rules}
+
 with open(cfg_path, "w") as f:
     json.dump(cfg, f, indent=2)

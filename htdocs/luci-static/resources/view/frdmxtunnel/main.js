@@ -5,6 +5,7 @@
 'require fs';
 'require poll';
 'require ui';
+'require network';
 
 function fmtBytes(b) {
 	if (!b || b <= 0) return '0 B';
@@ -22,7 +23,7 @@ function fmtSpeed(bps) {
 
 return view.extend({
 	load: function() {
-		return Promise.all([ L.resolveDefault(uci.load('frdmxtunnel'), {}) ]);
+		return Promise.all([ L.resolveDefault(uci.load('frdmxtunnel'), {}), L.resolveDefault(network.getDevices(), []) ]);
 	},
 	render: function(data) {
 		var m, s, o, lastRx = null, lastTx = null, lastTime = null;
@@ -30,7 +31,7 @@ return view.extend({
 
 		var style = E('style', {}, `
 			.ft-wrap { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1e293b; }
-			.ft-banner { background: linear-gradient(135deg, #d63031 0%, #e17055 55%, #0984e3 100%); color: #fff; border-radius: 10px; padding: 18px 22px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.08); }
+			.ft-banner { background: linear-gradient(90deg, #0039a6 0%, #005bea 45%, #d63031 78%, #b71c1c 100%); color: #fff; border-radius: 10px; padding: 18px 22px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.08); }
 			.ft-tabs { display: flex; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; flex-wrap: wrap; }
 			.ft-tab { background: #ffffff; border: 1px solid #cbd5e1; color: #475569; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; transition: all .15s; }
 			.ft-tab.active { background: #0284c7; color: #ffffff; border-color: #0284c7; }
@@ -132,7 +133,7 @@ return view.extend({
 			]),
 			E('div', { 'class': 'ft-card' }, [
 				E('div', { 'style': 'display:flex; justify-content:space-between; align-items:center;' }, [
-					E('strong', { 'style': 'font-size:14px;' }, _('Accounts (Click card to switch active bug/server)')),
+					E('strong', { 'style': 'font-size:14px;' }, _('Accounts (Pilih kolom untuk berpindah akun / bug)')),
 					E('small', { 'style': 'color:#64748b;' }, _('Auto-Fallback Enabled'))
 				]),
 				elAccList
@@ -270,23 +271,24 @@ return view.extend({
 		o.value('ws_tls', 'WebSocket + TLS (Port 443 / CDN / SNI)');
 		o.value('ws_none', 'WebSocket Non-TLS (Port 80 / HTTP)');
 		o.value('tcp_tls', 'TCP + TLS (Direct SNI)');
+                o.value('slowdns', 'SlowDNS (DNSTT / QSSH)');
 		o.default = 'ws_tls';
 		o.depends('proto', 'vless'); o.depends('proto', 'vmess'); o.depends('proto', 'trojan');
 
 		o = s.option(form.Value, 'server', _('Server Host / IP'));
 		o.rmempty = false; o.datatype = 'host';
 
-		o = s.option(form.ListValue, 'wan_if', _('WAN Interface (Multi-Modem)'));
-		o.value('', _('Auto (Default / mwan3)'));
-		o.value('usb0', 'Modem USB 1 (usb0)');
-		o.value('usb1', 'Modem USB 2 (usb1)');
-		o.value('eth1', 'Modem LAN/USB 1 (eth1)');
-		o.value('eth2', 'Modem LAN/USB 2 (eth2)');
-		o.value('wwan0', 'Modem M.2/PCIe 1 (wwan0)');
-		o.value('wwan1', 'Modem M.2/PCIe 2 (wwan1)');
-		o.default = '';
-
-		o = s.option(form.Value, 'port', _('Port'));
+		o = s.option(form.Value, 'wan_if', _('WAN Interface (Multi-Modem)'), _('Pilih Auto, interface terdeteksi aktif, atau ketik manual nama interface (misal: usb0, wwan0).'));
+                o.value('', _('Auto (Default / mwan3)'));
+                (data[1] || []).forEach(function(dev) {
+                        var name = dev.getName();
+                        if (dev.isUp() && !/^(lo|br-|ifb|sit|gre|ip6|docker|veth|wlan)/.test(name)) {
+                                o.value(name, name + ' (Terhubung)');
+                        }
+                });
+                o.placeholder = 'Auto (kosong) atau ketik manual...';
+                o.default = '';
+o = s.option(form.Value, 'port', _('Port'));
 		o.default = '443';
 		o.depends('proto', 'ssh'); o.depends('proto', 'vless'); o.depends('proto', 'vmess'); o.depends('proto', 'trojan'); o.depends('proto', 'ovpn');
 
@@ -300,15 +302,35 @@ return view.extend({
 		o = s.option(form.Value, 'password', _('Password / UUID / Auth'));
 		o.password = true;
 
+                o = s.option(form.Value, 'ssh_user', _('SlowDNS SSH Username'));
+                o.depends({ proto: 'vless', xray_mode: 'slowdns' });
+                o.depends({ proto: 'vmess', xray_mode: 'slowdns' });
+                o.depends({ proto: 'trojan', xray_mode: 'slowdns' });
+
+                o = s.option(form.Value, 'ssh_pass', _('SlowDNS SSH Password'));
+                o.password = true;
+                o.depends({ proto: 'vless', xray_mode: 'slowdns' });
+                o.depends({ proto: 'vmess', xray_mode: 'slowdns' });
+                o.depends({ proto: 'trojan', xray_mode: 'slowdns' });
+
 		o = s.option(form.Value, 'ns_domain', _('Nameserver (NS Domain)'));
 		o.depends({ proto: 'ssh', mode: 'slowdns' });
+                o.depends({ proto: 'vless', xray_mode: 'slowdns' });
+                o.depends({ proto: 'vmess', xray_mode: 'slowdns' });
+                o.depends({ proto: 'trojan', xray_mode: 'slowdns' });
 
 		o = s.option(form.Value, 'pubkey', _('SlowDNS Public Key'));
 		o.depends({ proto: 'ssh', mode: 'slowdns' });
+                o.depends({ proto: 'vless', xray_mode: 'slowdns' });
+                o.depends({ proto: 'vmess', xray_mode: 'slowdns' });
+                o.depends({ proto: 'trojan', xray_mode: 'slowdns' });
 
 		o = s.option(form.Value, 'dns_resolver', _('DNS Resolver'));
 		o.default = '1.1.1.1:53';
 		o.depends({ proto: 'ssh', mode: 'slowdns' });
+                o.depends({ proto: 'vless', xray_mode: 'slowdns' });
+                o.depends({ proto: 'vmess', xray_mode: 'slowdns' });
+                o.depends({ proto: 'trojan', xray_mode: 'slowdns' });
 		o.depends('proto', 'zivpn');
 
 		o = s.option(form.Value, 'obfs', _('ZiVPN Obfs Key'));
@@ -316,21 +338,30 @@ return view.extend({
 		o.depends('proto', 'zivpn');
 
 		o = s.option(form.Value, 'payload', _('Payload'));
+                o.placeholder = 'WS: GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]  |  HTTP: CONNECT [host_port] HTTP/1.1[crlf]Host: [sni][crlf][crlf]';
 		o.depends({ proto: 'ssh', mode: 'payload' });
 		o.depends({ proto: 'ssh', mode: 'ssl_payload' });
 
 		o = s.option(form.Value, 'sni', _('SNI / Server Name'));
+                o.placeholder = 'Contoh: ://tiktokv.com';
 		o.depends({ proto: 'ssh', mode: 'ssl' }); o.depends({ proto: 'ssh', mode: 'ssl_payload' });
 		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'tcp_tls' });
 		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'tcp_tls' });
 		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'tcp_tls' });
 
 		o = s.option(form.Value, 'ws_host', _('WebSocket Host'));
+                o.placeholder = 'Contoh: server-anda.myssh.web.id';
 		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'ws_none' });
 		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'ws_none' });
 		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'ws_none' });
 
-		o = s.option(form.Value, 'path', _('WebSocket Path'));
+		o = s.option(form.Flag, 'mux', _('Enable Mux (Concurrency 8)'), _('ON : Tuneup koneksi agar anti putus-sambung (anti-reset DPI) & ringan di CPU. OFF : Untuk speedtest / download besar maksimal.'));
+                o.default = '1';
+                o.rmempty = false;
+                o.depends('proto', 'vless'); o.depends('proto', 'vmess'); o.depends('proto', 'trojan');
+
+                o = s.option(form.Value, 'path', _('WebSocket Path'));
+                o.placeholder = 'Contoh: / atau /vless';
 		o.default = '/';
 		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'ws_none' });
 		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'ws_none' });
