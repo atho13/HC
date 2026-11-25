@@ -72,23 +72,12 @@ jobs:
         EOF
         make defconfig
 
+
     - name: Compile Package
       run: |
         cd openwrt-sdk
-        make package/luci-app-frdmxtunnel/clean V=sc
-        make package/luci-app-frdmxtunnel/prepare V=sc
-        make -C package/luci-app-frdmxtunnel compile \
-          TOPDIR="$PWD" \
-          INCLUDE_DIR="$PWD/include" \
-          SCRIPT_DIR="$PWD/scripts" \
-          V=sc
+        make package/luci-app-frdmxtunnel/compile IGNORE_ERRORS=1 V=sc
         make package/index V=sc
-
-    #- name: Compile Package
-      #run: |
-        #cd openwrt-sdk
-        #make package/luci-app-frdmxtunnel/compile IGNORE_ERRORS=1 V=sc
-        #make package/index V=sc
 
     - name: Upload Artifact (${{ matrix.name }})
       uses: actions/upload-artifact@v4
