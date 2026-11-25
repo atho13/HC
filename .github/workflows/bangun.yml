@@ -72,12 +72,12 @@ jobs:
         EOF
         make defconfig
 
-    - name: Compile Package
+      - name: Compile Package
       run: |
         cd openwrt-sdk
+        make package/luci-app-frdmxtunnel/clean V=sc
         make package/luci-app-frdmxtunnel/prepare V=sc
-        make package/luci-app-frdmxtunnel/compile V=sc
-        make package/luci-app-frdmxtunnel/install V=sc
+        make package/luci-app-frdmxtunnel/compile BUILD_DEPENDS= V=sc
         make package/index V=sc
 
     - name: Upload Artifact (${{ matrix.name }})
