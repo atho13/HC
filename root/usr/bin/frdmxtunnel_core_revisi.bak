@@ -104,17 +104,21 @@ table inet frdmxtunnel {
     chain prerouting {
         type nat hook prerouting priority dstnat - 1; policy accept;
 
-        # 1. WAJIB PALING ATAS: Loloskan paket DHCP (agar HP/Laptop langsung dapat IP saat konek WiFi)
+        # 1. Loloskan otomatis semua akses ke IP milik router sendiri (LuCI, File Manager, SSH)
+        fib daddr type local return
+
+        # 2. Loloskan paket DHCP agar WiFi langsung konek
         udp dport { 67, 68 } return
         udp sport { 67, 68 } return
 
-        # 2. Loloskan semua trafik jaringan lokal, LAN, Broadcast, dan Multicast
-        iifname "br-lan" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
+        # 3. Loloskan jaringan lokal, LAN, Broadcast, dan Multicast
+        ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
+        ip6 daddr { ::1/128, fc00::/7, fe80::/10, ff00::/8 } return
 
-        # 3. Loloskan IP Server & Resolver Tunnel
+        # 4. Loloskan IP Server & Resolver Tunnel
         $BYPASS_RULE
 
-        # 4. Setelah trafik lokal & DHCP aman, baru belokkan DNS & Internet ke Xray
+        # 5. Baru belokkan DNS & Trafik Internet keluar ke Xray
         iifname "br-lan" udp dport 53 redirect to :5353
         iifname "br-lan" tcp dport 53 redirect to :5353
         iifname "br-lan" tcp dport 1-65535 redirect to :12345
@@ -122,9 +126,11 @@ table inet frdmxtunnel {
     chain output {
         type nat hook output priority -100; policy accept;
         meta mark 0xff return
+        fib daddr type local return
         $BYPASS_RULE
         udp dport { 67, 68 } return
         ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
+        ip6 daddr { ::1/128, fc00::/7, fe80::/10, ff00::/8 } return
         udp dport 53 redirect to :5353
         tcp dport 53 redirect to :5353
         tcp dport 1-65535 redirect to :12345
