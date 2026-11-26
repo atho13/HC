@@ -86,7 +86,6 @@ define Package/luci-app-frdmxtunnel/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cores/zivpn $(1)/root/frdmxtunnel/zivpn
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cores/qssh $(1)/root/frdmxtunnel/qssh
 	$(INSTALL_DATA) ./root/root/frdmxtunnel/geosite.dat $(1)/root/frdmxtunnel/geosite.dat
-	$(INSTALL_DATA) ./root/root/frdmxtunnel/geoip.dat $(1)/root/frdmxtunnel/geoip.dat
 endef
 
 define Package/luci-app-frdmxtunnel/postinst
