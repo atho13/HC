@@ -42,6 +42,69 @@ return view.extend({
 			.ft-acc-card { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 14px; cursor: pointer; transition: all .15s; }
 			.ft-acc-card.active { border: 2px solid #0284c7; background: #f0f9ff; }
 			.ft-log-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-family: monospace; font-size: 12px; color: #334155; white-space: pre-wrap; max-height: 150px; overflow-y: auto; }
+                        @keyframes ftFlashSweep {
+                                0% { left: -85%; opacity: 0; }
+                                15% { opacity: 0.95; }
+                                55% { left: 135%; opacity: 0.95; }
+                                100% { left: 135%; opacity: 0; }
+                        }
+                        @keyframes ftCardSheen {
+                                0%, 68% { left: -90%; opacity: 0; }
+                                78% { opacity: 0.7; }
+                                100% { left: 135%; opacity: 0; }
+                        }
+                        @keyframes ftElectricPulse {
+                                0%, 100% { box-shadow: 0 0 0 0 rgba(2, 132, 199, 0.35), 0 4px 14px rgba(2, 132, 199, 0.12); }
+                                50% { box-shadow: 0 0 14px 3px rgba(56, 189, 248, 0.55), 0 4px 18px rgba(214, 48, 49, 0.18); }
+                        }
+                        .ft-banner, .ft-card, .ft-stat-box, .ft-acc-card.active {
+                                position: relative;
+                                overflow: hidden;
+                        }
+                        .ft-banner::after {
+                                content: "";
+                                position: absolute;
+                                top: 0; left: -85%;
+                                width: 55%; height: 100%;
+                                background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.45) 48%, rgba(125,211,252,0.75) 52%, transparent 80%);
+                                transform: skewX(-22deg);
+                                animation: ftFlashSweep 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+                                pointer-events: none;
+                        }
+                        .ft-card::after {
+                                content: "";
+                                position: absolute;
+                                top: 0; left: -90%;
+                                width: 45%; height: 100%;
+                                background: linear-gradient(105deg, transparent 25%, rgba(56,189,248,0.14) 50%, transparent 75%);
+                                transform: skewX(-22deg);
+                                animation: ftCardSheen 6.5s ease-in-out infinite;
+                                pointer-events: none;
+                        }
+                        .ft-stat-box::after {
+                                content: "";
+                                position: absolute;
+                                top: 0; left: -90%;
+                                width: 50%; height: 100%;
+                                background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.85) 50%, transparent 80%);
+                                transform: skewX(-22deg);
+                                animation: ftCardSheen 5s ease-in-out infinite;
+                                pointer-events: none;
+                        }
+                        .ft-acc-card.active {
+                                animation: ftElectricPulse 2.4s ease-in-out infinite;
+                        }
+                        .ft-acc-card.active::after {
+                                content: "";
+                                position: absolute;
+                                top: 0; left: -85%;
+                                width: 50%; height: 100%;
+                                background: linear-gradient(105deg, transparent 20%, rgba(14,165,233,0.28) 50%, transparent 80%);
+                                transform: skewX(-22deg);
+                                animation: ftFlashSweep 3s ease-in-out infinite;
+                                pointer-events: none;
+                        }
+
 		`);
 		var elDot     = E('span', { 'style': 'display:inline-block; width:10px; height:10px; border-radius:50%; background:#94a3b8; margin-right:8px;' });
 		var elState   = E('span', { 'style': 'font-weight:700; font-size:15px; color:#475569;' }, 'Checking...');
@@ -249,6 +312,88 @@ return view.extend({
 		s.anonymous = true;
 		s.addremove = true;
 
+                o = s.option(form.DummyValue, '_import_raw', _('Quick Import Account'));
+                o.depends('proto', 'vless'); o.depends('proto', 'vmess'); o.depends('proto', 'trojan');
+                o.rawhtml = true;
+                o.renderWidget = function(section_id, option_index, cfgvalue) {
+                        var input = E('input', {
+                                'type': 'text',
+                                'class': 'cbi-input-text',
+                                'style': 'width:70%; margin-right:8px;',
+                                'placeholder': 'Tempel link vless:// atau vmess:// atau trojan:// di sini...'
+                        });
+                        var btn = E('button', {
+                                'type': 'button',
+                                'class': 'cbi-button cbi-button-apply',
+                                'click': function() {
+                                        var raw = (input.value || '').trim();
+                                        if (!raw) return alert('Silakan tempel link akun terlebih dahulu!');
+                                        var proto = '', server = '', port = '', pass = '', net = 'ws', tls = 'tls', sni = '', host = '', path = '/';
+                                        try {
+                                                if (raw.startsWith('vmess://')) {
+                                                        var b64 = raw.slice(8).split('#')[0].trim();
+                                                        while (b64.length % 4) b64 += '=';
+                                                        var j = JSON.parse(decodeURIComponent(escape(atob(b64))));
+                                                        proto = 'vmess';
+                                                        server = j.add || '';
+                                                        port = String(j.port || 443);
+                                                        pass = j.id || '';
+                                                        net = (j.net || 'ws').toLowerCase();
+                                                        tls = (j.tls === 'tls' || j.tls === true) ? 'tls' : 'none';
+                                                        sni = j.sni || j.host || server;
+                                                        host = j.host || sni;
+                                                        path = j.path || '/';
+                                                } else if (raw.startsWith('vless://') || raw.startsWith('trojan://')) {
+                                                        proto = raw.startsWith('vless://') ? 'vless' : 'trojan';
+                                                        var u = new URL(raw.replace(/^(vless|trojan):\/\//, 'http://'));
+                                                        pass = decodeURIComponent(u.username || '');
+                                                        server = u.hostname || '';
+                                                        port = u.port || '443';
+                                                        var p = u.searchParams;
+                                                        net = (p.get('type') || 'ws').toLowerCase();
+                                                        var sec = (p.get('security') || 'tls').toLowerCase();
+                                                        tls = (sec === 'tls' || sec === 'reality') ? 'tls' : 'none';
+                                                        sni = p.get('sni') || p.get('peer') || server;
+                                                        host = p.get('host') || sni;
+                                                        path = decodeURIComponent(p.get('path') || '/');
+                                                } else {
+                                                        return alert('Format tidak didukung! Gunakan vless://, vmess://, atau trojan://');
+                                                }
+                                                var xmode = 'ws_tls';
+                                                if (net === 'xhttp' || net === 'splithttp') xmode = (tls === 'tls') ? 'xhttp_tls' : 'xhttp_none';
+                                                else if (net === 'tcp') xmode = 'tcp_tls';
+                                                else xmode = (tls === 'tls') ? 'ws_tls' : 'ws_none';
+
+                                                function setVal(optName, val) {
+                                                        var el = document.querySelector('[id$=".' + section_id + '.' + optName + '"] select, [id$=".' + section_id + '.' + optName + '"] input, [name="cbid.frdmxtunnel.' + section_id + '.' + optName + '"]');
+                                                        if (el) {
+                                                                el.value = val;
+                                                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                                        }
+                                                }
+                                                setVal('proto', proto);
+                                                setTimeout(function() {
+                                                        setVal('xray_mode', xmode);
+                                                        setTimeout(function() {
+                                                                setVal('server', server);
+                                                                setVal('port', port);
+                                                                setVal('password', pass);
+                                                                setVal('sni', sni);
+                                                                setVal('ws_host', host);
+                                                                setVal('path', path);
+                                                                input.value = '';
+                                                                alert('Berhasil import akun ' + proto.toUpperCase() + ' (' + xmode + ')! Silakan sesuaikan SNI/Bug jika perlu lalu klik Save & Apply.');
+                                                        }, 120);
+                                                }, 120);
+                                        } catch (e) {
+                                                alert('Gagal membaca link akun: ' + e.message);
+                                        }
+                                }
+                        }, [_('Import')]);
+                        return E('div', { 'style': 'display:flex; align-items:center;' }, [input, btn]);
+                };
+
 		o = s.option(form.ListValue, 'proto', _('Protocol'));
 		o.value('ssh', 'SSH Tunnel');
 		o.value('vless', 'VLESS (Xray)');
@@ -270,6 +415,8 @@ return view.extend({
 		o = s.option(form.ListValue, 'xray_mode', _('Connection Mode'));
 		o.value('ws_tls', 'WebSocket + TLS (Port 443 / CDN / SNI)');
 		o.value('ws_none', 'WebSocket Non-TLS (Port 80 / HTTP)');
+            o.value('xhttp_tls', 'XHTTP + TLS (Port 443 / CDN / SNI - v25+)');
+            o.value('xhttp_none', 'XHTTP Non-TLS (Port 80 / HTTP - v25+)');
 		o.value('tcp_tls', 'TCP + TLS (Direct SNI)');
                 o.value('slowdns', 'SlowDNS (DNSTT / QSSH)');
 		o.default = 'ws_tls';
@@ -325,7 +472,11 @@ o = s.option(form.Value, 'port', _('Port'));
                 o.depends({ proto: 'vmess', xray_mode: 'slowdns' });
                 o.depends({ proto: 'trojan', xray_mode: 'slowdns' });
 
-		o = s.option(form.Value, 'dns_resolver', _('DNS Resolver'));
+		o = s.option(form.Value, 'dns_resolver', _('DNS Resolver'), _('Pilih Auto (DNS Operator/Modem - direkomendasikan) atau ketik manual seperti 1.1.1.1 / 8.8.8.8.'));
+            o.value('auto', _('Auto (DNS Operator / Modem)'));
+            o.value('1.1.1.1', '1.1.1.1 (Cloudflare)');
+            o.value('8.8.8.8', '8.8.8.8 (Google)');
+            o.default = 'auto';
 		o.default = '1.1.1.1:53';
 		o.depends({ proto: 'ssh', mode: 'slowdns' });
                 o.depends({ proto: 'vless', xray_mode: 'slowdns' });
@@ -344,16 +495,16 @@ o = s.option(form.Value, 'port', _('Port'));
 
 		o = s.option(form.Value, 'sni', _('SNI / Server Name'));
                 o.placeholder = 'Contoh: ://tiktokv.com';
-		o.depends({ proto: 'ssh', mode: 'ssl' }); o.depends({ proto: 'ssh', mode: 'ssl_payload' });
-		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'tcp_tls' });
-		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'tcp_tls' });
-		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'tcp_tls' });
+		o.depends({ proto: 'ssh', mode: 'payload' }); o.depends({ proto: 'ssh', mode: 'ssl' }); o.depends({ proto: 'ssh', mode: 'ssl_payload' });
+		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'tcp_tls' }); o.depends({ proto: 'vless', xray_mode: 'xhttp_tls' });
+		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'tcp_tls' }); o.depends({ proto: 'vmess', xray_mode: 'xhttp_tls' });
+		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'tcp_tls' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_tls' });
 
 		o = s.option(form.Value, 'ws_host', _('WebSocket Host'));
                 o.placeholder = 'Contoh: server-anda.myssh.web.id';
-		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'ws_none' });
-		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'ws_none' });
-		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'ws_none' });
+		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'ws_none' }); o.depends({ proto: 'vless', xray_mode: 'xhttp_tls' }); o.depends({ proto: 'vless', xray_mode: 'xhttp_none' });
+		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'ws_none' }); o.depends({ proto: 'vmess', xray_mode: 'xhttp_tls' }); o.depends({ proto: 'vmess', xray_mode: 'xhttp_none' });
+		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'ws_none' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_tls' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_none' });
 
 		o = s.option(form.Flag, 'mux', _('Enable Mux (Concurrency 8)'), _('ON : Tuneup koneksi agar anti putus-sambung (anti-reset DPI) & ringan di CPU. OFF : Untuk speedtest / download besar maksimal.'));
                 o.default = '1';
@@ -363,9 +514,9 @@ o = s.option(form.Value, 'port', _('Port'));
                 o = s.option(form.Value, 'path', _('WebSocket Path'));
                 o.placeholder = 'Contoh: / atau /vless';
 		o.default = '/';
-		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'ws_none' });
-		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'ws_none' });
-		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'ws_none' });
+		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'ws_none' }); o.depends({ proto: 'vless', xray_mode: 'xhttp_tls' }); o.depends({ proto: 'vless', xray_mode: 'xhttp_none' });
+		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'ws_none' }); o.depends({ proto: 'vmess', xray_mode: 'xhttp_tls' }); o.depends({ proto: 'vmess', xray_mode: 'xhttp_none' });
+		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'ws_none' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_tls' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_none' });
 
 		return m.render().then(function(mapEl) {
 			var accView = E('div', { 'class': 'ft-card', 'style': 'display:none;' }, [mapEl]);

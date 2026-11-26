@@ -57,6 +57,8 @@ NETWORK="ws"
 [ "$XRAY_MODE" = "ws_none" ] && TLS_SEC="none"
 [ "$XRAY_MODE" = "tcp_tls" ] && { NETWORK="tcp"; TLS_SEC="tls"; }
 [ "$XRAY_MODE" = "ws_tls" ] && TLS_SEC="tls"
+[ "$XRAY_MODE" = "xhttp_tls" ] && { NETWORK="xhttp"; TLS_SEC="tls"; }
+[ "$XRAY_MODE" = "xhttp_none" ] && { NETWORK="xhttp"; TLS_SEC="none"; }
 
 [ -z "$TLS_SEC" ] && TLS_SEC="tls"
 [ -z "$WS_PATH" ] && WS_PATH="/"
@@ -81,7 +83,7 @@ echo "$DNS_RESOLVER" | grep -q ":" || DNS_RESOLVER="${DNS_RESOLVER}:53"
 resolve_ipv4() {
     local host=$(echo "$1" | cut -d: -f1)
     echo "$host" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && echo "$host" && return
-    nslookup "$host" 8.8.8.8 2>/dev/null | awk '/^Address [0-9]+: / {print $3}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1
+    nslookup "$host" 2>/dev/null | awk '/^Address [0-9]+: / {print $3}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1
 }
 
 SERVER_IP=$(resolve_ipv4 "$SERVER")
@@ -94,7 +96,13 @@ log "Starting Frdmx Tunnel Core (Profile #$ACTIVE_IDX)..."
 log "Target: $SERVER (${SERVER_IP:-unresolved}) | Protocol: $PROTO | Mode: ${XRAY_MODE:-${MODE:-default}}"
 
 ACTIVE_WAN="${WAN_IF:-$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')}"
-[ -n "$ACTIVE_WAN" ] && ip link set dev "$ACTIVE_WAN" mtu 1380 >/dev/null 2>&1
+if [ -n "$ACTIVE_WAN" ]; then
+    if [ "$MODE" = "slowdns" ] || [ "$XRAY_MODE" = "slowdns" ]; then
+        ip link set dev "$ACTIVE_WAN" mtu 1380 >/dev/null 2>&1
+    else
+        ip link set dev "$ACTIVE_WAN" mtu 1500 >/dev/null 2>&1
+    fi
+fi
 
 setup_firewall() {
     nft delete table inet frdmxtunnel 2>/dev/null
@@ -102,25 +110,35 @@ setup_firewall() {
         nft -f - <<NFT_EOF
 table inet frdmxtunnel {
     chain prerouting {
-        type nat hook prerouting priority dstnat; policy accept;
+        type nat hook prerouting priority dstnat - 1; policy accept;
+        iifname "br-lan" udp dport 53 redirect to :5353
+        iifname "br-lan" tcp dport 53 redirect to :5353
+        fib daddr type local return
+        udp dport { 67, 68 } return
+        udp sport { 67, 68 } return
+        ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
+        ip6 daddr { ::1/128, fc00::/7, fe80::/10, ff00::/8 } return
         $BYPASS_RULE
         iifname "br-lan" udp dport 53 redirect to :5353
         iifname "br-lan" tcp dport 53 redirect to :5353
-        iifname "br-lan" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
         iifname "br-lan" tcp dport 1-65535 redirect to :12345
     }
     chain output {
         type nat hook output priority -100; policy accept;
         meta mark 0xff return
+        fib daddr type local return
         $BYPASS_RULE
+        udp dport { 67, 68 } return
         ip daddr { 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } return
+        ip6 daddr { ::1/128, fc00::/7, fe80::/10, ff00::/8 } return
         udp dport 53 redirect to :5353
         tcp dport 53 redirect to :5353
         tcp dport 1-65535 redirect to :12345
     }
     chain forward {
         type filter hook forward priority mangle; policy accept;
-        tcp flags syn tcp option maxseg size set 1340
+        iifname "br-lan" udp dport 443 drop
+        tcp flags syn tcp option maxseg size set rt mtu
     }
 }
 NFT_EOF
@@ -135,6 +153,10 @@ find_bin() {
     [ -x "/usr/bin/$1" ] && echo "/usr/bin/$1" && return
     command -v "$1" 2>/dev/null
 }
+
+export GOGC=20
+export GOMEMLIMIT=35MiB
+
 if [ "$PROTO" = "ssh" ]; then
     if [ "$MODE" = "slowdns" ]; then
         QSSH_BIN=$(find_bin qssh)
@@ -147,39 +169,68 @@ if [ "$PROTO" = "ssh" ]; then
   "transport": { "tls": false, "host": "", "path": "/", "sni": "" },
   "proxy": { "enable": false, "host": "", "port": 0 },
   "payload": { "enable": false, "request": "", "expect": [] },
-  "concurrency": { "workers": 1, "start_port": 1080 }
+  "concurrency": { "workers": 2, "start_port": 1081 }
 }
 QSSH_EOF
         "$QSSH_BIN" --dial /tmp/qssh_custom.json >> "$LOG_FILE" 2>&1 &
         sleep 3
-    elif [ "$MODE" = "payload" ]; then
-        printf '%s' "$PAYLOAD" > /tmp/frdmxtunnel_payload.txt
-        sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '$SERVER' '$PORT' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI'" -N -D 0.0.0.0:1080 "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
-    elif [ "$MODE" = "ssl" ]; then
-        printf "foreground = yes\nclient = yes\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\nsocket = l:SO_KEEPALIVE=1\nsocket = r:SO_KEEPALIVE=1\n[ssh-tls]\naccept = 127.0.0.1:8990\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom.conf
-        stunnel /tmp/stunnel_custom.conf >> "$LOG_FILE" 2>&1 &
-        sleep 2
-        sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:1080 -p 8990 "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1 &
-    elif [ "$MODE" = "ssl_payload" ]; then
-        printf "foreground = yes\nclient = yes\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\nsocket = l:SO_KEEPALIVE=1\nsocket = r:SO_KEEPALIVE=1\n[ssh-wss]\naccept = 127.0.0.1:8990\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom.conf
-        stunnel /tmp/stunnel_custom.conf >> "$LOG_FILE" 2>&1 &
-        sleep 2
-        printf '%s' "$PAYLOAD" > /tmp/frdmxtunnel_payload.txt
-        sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '127.0.0.1' '8990' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI'" -N -D 0.0.0.0:1080 "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1 &
+        SSH_OUTBOUNDS='{ "tag": "ssh-1", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1081 }] }, "streamSettings": { "sockopt": { '"${IF_JSON}"'"mark": 255 } } }'
     else
-        sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:1080 -p "$PORT" "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
+        for IDX in 1 2; do
+            LPORT=$((1080 + IDX))
+            SPORT=$((8990 + IDX))
+            if [ "$MODE" = "payload" ]; then
+                printf '%s' "$PAYLOAD" > /tmp/frdmxtunnel_payload.txt
+                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '$SERVER' '$PORT' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI'" -N -D 0.0.0.0:$LPORT "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
+            elif [ "$MODE" = "ssl" ]; then
+                printf "foreground = yes\nclient = yes\nTIMEOUTclose = 0\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\nsocket = l:SO_KEEPALIVE=1\nsocket = r:SO_KEEPALIVE=1\n[ssh-tls-$IDX]\naccept = 127.0.0.1:$SPORT\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom_$IDX.conf
+                stunnel /tmp/stunnel_custom_$IDX.conf >> "$LOG_FILE" 2>&1 &
+                sleep 1
+                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:$LPORT -p $SPORT "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1 &
+            elif [ "$MODE" = "ssl_payload" ]; then
+                printf "foreground = yes\nclient = yes\nTIMEOUTclose = 0\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\nsocket = l:SO_KEEPALIVE=1\nsocket = r:SO_KEEPALIVE=1\n[ssh-wss-$IDX]\naccept = 127.0.0.1:$SPORT\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom_$IDX.conf
+                stunnel /tmp/stunnel_custom_$IDX.conf >> "$LOG_FILE" 2>&1 &
+                sleep 1
+                printf '%s' "$PAYLOAD" > /tmp/frdmxtunnel_payload.txt
+                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '127.0.0.1' '$SPORT' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI'" -N -D 0.0.0.0:$LPORT "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1 &
+            else
+                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:$LPORT -p "$PORT" "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
+            fi
+        done
+        sleep 3
+        SSH_OUTBOUNDS='{ "tag": "ssh-1", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1081 }] }, "streamSettings": { "sockopt": { '"${IF_JSON}"'"mark": 255 } } },
+    { "tag": "ssh-2", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1082 }] }, "streamSettings": { "sockopt": { '"${IF_JSON}"'"mark": 255 } } }'
     fi
 
     cat > /tmp/xray_custom.json <<XRAY_SSH_EOF
 {
   "log": { "loglevel": "error", "access": "none" },
+  "policy": {
+    "levels": { "0": { "handshake": 4, "connIdle": 25, "uplinkOnly": 2, "downlinkOnly": 5, "bufferSize": 512 } },
+    "system": { "statsInboundUplink": false, "statsInboundDownlink": false }
+  },
+  "observatory": { "subjectSelector": ["ssh-"], "probeURL": "http://cloudflare.com", "probeInterval": "15s" },
+  "fakedns": [
+    { "ipPool": "198.18.0.0/15", "poolSize": 65535 }
+  ],
+  "dns": {
+    "tag": "dns-module",
+    "servers": [ "fakedns" ],
+    "queryStrategy": "UseIPv4"
+  },
   "inbounds": [
-    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls"] } },
-    { "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "$DNS_PRIMARY", "port": 53, "network": "tcp,udp" } }
+    { "port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": { "udp": true } },
+    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls", "fakedns"] } },
+    { "tag": "dns-in", "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "1.1.1.1", "port": 53, "network": "tcp,udp" } }
   ],
   "outbounds": [
-    { "tag": "proxy", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1080 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } }
-  ]
+    $SSH_OUTBOUNDS,
+    { "tag": "dns-out", "protocol": "dns" }
+  ],
+  "routing": {
+    "balancers": [{ "tag": "ssh-bal", "selector": ["ssh-"], "strategy": { "type": "leastPing" }, "fallbackTag": "zi-1", "fallbackTag": "ssh-1" }],
+    "rules": [{ "type": "field", "network": "tcp,udp", "balancerTag": "ssh-bal" }]
+  }
 }
 XRAY_SSH_EOF
     config_get BLOCK_ADS main block_ads 0
@@ -203,16 +254,29 @@ elif [ "$PROTO" = "zivpn" ]; then
     cat > /tmp/xray_custom.json <<XRAY_ZI_EOF
 {
   "log": { "loglevel": "error", "access": "none" },
+  "policy": {
+    "levels": { "0": { "handshake": 4, "connIdle": 25, "uplinkOnly": 2, "downlinkOnly": 5, "bufferSize": 512 } },
+    "system": { "statsInboundUplink": false, "statsInboundDownlink": false }
+  },
   "observatory": { "subjectSelector": ["zi-"], "probeURL": "http://gstatic.com", "probeInterval": "15s" },
+  "fakedns": [
+    { "ipPool": "198.18.0.0/15", "poolSize": 65535 }
+  ],
+  "dns": {
+    "tag": "dns-module",
+    "servers": [ "fakedns" ],
+    "queryStrategy": "UseIPv4"
+  },
   "inbounds": [
-    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls"] } },
-    { "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "$DNS_PRIMARY", "port": 53, "network": "tcp,udp" } }
+    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls", "fakedns"] } },
+    { "tag": "dns-in", "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "1.1.1.1", "port": 53, "network": "tcp,udp" } }
   ],
   "outbounds": [
     { "tag": "zi-1", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1081 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } },
     { "tag": "zi-2", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1082 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } },
     { "tag": "zi-3", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1083 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } },
-    { "tag": "zi-4", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1084 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } }
+    { "tag": "zi-4", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1084 }] }, "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } },
+    { "tag": "dns-out", "protocol": "dns" }
   ],
   "routing": {
     "balancers": [{ "tag": "zi-bal", "selector": ["zi-"], "strategy": { "type": "leastPing" } }],
@@ -229,6 +293,7 @@ XRAY_ZI_EOF
     BLOCK_ADS="$BLOCK_ADS" BLOCK_PORN="$BLOCK_PORN" DIRECT_BANK="$DIRECT_BANK" ROUTE_GAME="$ROUTE_GAME" ROUTE_STREAM="$ROUTE_STREAM" ROUTE_CONF="$ROUTE_CONF" /usr/bin/frdmxtunnel_rules.py
     setup_firewall
     [ -f /root/frdmxtunnel/geosite.dat ] && export XRAY_LOCATION_ASSET=/root/frdmxtunnel; exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
+
 elif [ "$PROTO" = "vless" ] || [ "$PROTO" = "vmess" ] || [ "$PROTO" = "trojan" ]; then
     SDNS_OUTBOUND=""
     PROXY_CHAIN=""
@@ -243,7 +308,7 @@ elif [ "$PROTO" = "vless" ] || [ "$PROTO" = "vmess" ] || [ "$PROTO" = "trojan" ]
   "transport": { "tls": false, "host": "", "path": "/", "sni": "" },
   "proxy": { "enable": false, "host": "", "port": 0 },
   "payload": { "enable": false, "request": "", "expect": [] },
-  "concurrency": { "workers": 1, "start_port": 1089 }
+  "concurrency": { "workers": 2, "start_port": 1089 }
 }
 QSSH_XRAY_EOF
         "$QSSH_BIN" --dial /tmp/qssh_custom.json >> "$LOG_FILE" 2>&1 &
@@ -257,25 +322,70 @@ QSSH_XRAY_EOF
     [ "$PROTO" = "vless" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"users\": [{\"id\": \"$PASS\", \"encryption\": \"none\"}] }]"
     [ "$PROTO" = "vmess" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"users\": [{\"id\": \"$PASS\", \"alterId\": 0, \"security\": \"auto\"}] }]"
     [ "$PROTO" = "trojan" ] && OUTBOUND_SETTINGS="\"servers\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"password\": \"$PASS\" }]"
-    [ "$NETWORK" = "ws" ] && ALPN_STR='"alpn": ["http/1.1"], ' || ALPN_STR=""
-    [ "$TLS_SEC" = "tls" ] && TLS_BLOCK="\"tlsSettings\": { \"serverName\": \"$FINAL_SNI\", \"fingerprint\": \"chrome\", ${ALPN_STR}\"verifyPeerCertByName\": \"$SERVER,$FINAL_WS_HOST\" }," || TLS_BLOCK=""
-    [ "$NETWORK" = "ws" ] && NET_BLOCK="\"wsSettings\": { \"path\": \"$WS_PATH\", \"host\": \"$FINAL_WS_HOST\", \"heartbeatPeriod\": 15 }," || NET_BLOCK=""
+
+    [ "$TLS_SEC" = "tls" ] && TLS_BLOCK="\"tlsSettings\": { \"serverName\": \"$FINAL_SNI\", \"fingerprint\": \"chrome\", \"verifyPeerCertByName\": \"$SERVER,$FINAL_WS_HOST\" }," || TLS_BLOCK=""
+    NET_BLOCK=""
+    [ "$NETWORK" = "ws" ] && NET_BLOCK="\"wsSettings\": { \"path\": \"$WS_PATH\", \"host\": \"$FINAL_WS_HOST\", \"heartbeatPeriod\": 15 },"
+    [ "$NETWORK" = "xhttp" ] && NET_BLOCK="\"xhttpSettings\": { \"path\": \"$WS_PATH\", \"host\": \"$FINAL_WS_HOST\", \"mode\": \"auto\" },"
+    [ "$MUX_EN" -eq 1 ] && MUX_BLOCK='"mux": { "enabled": true, "concurrency": 8, "xudpConcurrency": 8, "xudpProxyUDP443": "reject" }' || MUX_BLOCK='"mux": { "enabled": false }'
 
     cat > /tmp/xray_custom.json <<XRAY_EOF
 {
   "log": { "loglevel": "error", "access": "none" },
-  "dns": { "tag": "dns-module", "servers": ["8.8.8.8", "1.1.1.1"] },
+  "policy": {
+    "levels": {
+      "0": {
+        "handshake": 4,
+        "connIdle": 25,
+        "uplinkOnly": 2,
+        "downlinkOnly": 5,
+        "bufferSize": 512
+      }
+    },
+    "system": {
+      "statsInboundUplink": false,
+      "statsInboundDownlink": false
+    }
+  },
+  "dns": {
+    "tag": "dns-module",
+    "servers": [
+      { "address": "tcp://1.1.1.1", "skipFallback": false },
+      { "address": "8.8.8.8", "port": 53 }
+    ],
+    "queryStrategy": "UseIPv4"
+  },
   "inbounds": [
     { "port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": { "udp": true } },
-    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls"] } },
-    { "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "$DNS_PRIMARY", "port": 53, "network": "tcp,udp" } }
+    { "port": 12345, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "network": "tcp", "followRedirect": true }, "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true } },
+    { "tag": "dns-in", "port": 5353, "listen": "0.0.0.0", "protocol": "dokodemo-door", "settings": { "address": "1.1.1.1", "port": 53, "network": "tcp,udp" } }
   ],
   "outbounds": [
     $SDNS_OUTBOUND
-    { "tag": "proxy", "protocol": "$PROTO", "settings": { $OUTBOUND_SETTINGS }, $PROXY_CHAIN "streamSettings": { "network": "$NETWORK", "security": "$TLS_SEC", $TLS_BLOCK $NET_BLOCK "sockopt": { ${IF_JSON}"mark": 255, "tcpNoDelay": true, "tcpKeepAliveIdle": 30, "tcpKeepAliveInterval": 10 } }, $([ "$MUX_EN" -eq 1 ] && echo '"mux": { "enabled": true, "concurrency": 8 }' || echo '"mux": { "enabled": false }') },
+    {
+      "tag": "proxy",
+      "protocol": "$PROTO",
+      "settings": { $OUTBOUND_SETTINGS },
+      $PROXY_CHAIN
+      "streamSettings": {
+        "network": "$NETWORK",
+        "security": "$TLS_SEC",
+        $TLS_BLOCK
+        $NET_BLOCK
+        "sockopt": { ${IF_JSON}"mark": 255, "tcpNoDelay": true, "tcpKeepAliveIdle": 10, "tcpKeepAliveInterval": 5 }
+      },
+      $MUX_BLOCK
+    },
+    { "tag": "dns-out", "protocol": "dns" },
     { "tag": "direct", "protocol": "freedom", "streamSettings": { "sockopt": { ${IF_JSON}"mark": 255 } } }
   ],
-  "routing": { "domainStrategy": "AsIs", "rules": [ { "type": "field", "inboundTag": ["dns-module"], "outboundTag": "direct" } ] }
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      { "type": "field", "inboundTag": ["dns-in"], "outboundTag": "dns-out" },
+      { "type": "field", "inboundTag": ["dns-module"], "outboundTag": "proxy" }
+    ]
+  }
 }
 XRAY_EOF
     config_get BLOCK_ADS main block_ads 0
@@ -286,7 +396,7 @@ XRAY_EOF
     config_get ROUTE_CONF main route_conf proxy
     BLOCK_ADS="$BLOCK_ADS" BLOCK_PORN="$BLOCK_PORN" DIRECT_BANK="$DIRECT_BANK" ROUTE_GAME="$ROUTE_GAME" ROUTE_STREAM="$ROUTE_STREAM" ROUTE_CONF="$ROUTE_CONF" /usr/bin/frdmxtunnel_rules.py
     setup_firewall
-    log "Starting Xray Core ($NETWORK | $TLS_SEC)..."
+    log "Starting Xray Core ($NETWORK | $TLS_SEC | Mux=$MUX_EN)..."
     [ -f /root/frdmxtunnel/geosite.dat ] && export XRAY_LOCATION_ASSET=/root/frdmxtunnel; exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
 
 elif [ "$PROTO" = "ovpn" ]; then

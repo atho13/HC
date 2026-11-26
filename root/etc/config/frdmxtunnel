@@ -1,9 +1,12 @@
+
 config global 'main'
 	option enabled '0'
 	option dns_server '1.1.1.1'
 	option block_ads '1'
 	option block_porn '1'
-	option direct_bank '0'
 	option route_game 'proxy'
 	option route_stream 'proxy'
 	option route_conf 'proxy'
+
+config profile
+

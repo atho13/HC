@@ -51,7 +51,12 @@ def build_payload(raw, host, port, sni=""):
         return p
 
     if "Sec-WebSocket-Key" not in p and "Upgrade: websocket" in p:
-        p = p.rstrip("\r\n") + f"\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        extra = ""
+        if "User-Agent:" not in p:
+            extra += "\r\nUser-Agent: Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36"
+        if "Origin:" not in p:
+            extra += f"\r\nOrigin: http://{sni_val}"
+        p = p.rstrip("\r\n") + f"{extra}\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
     elif not p.endswith("\r\n\r\n"):
         p = p.rstrip("\r\n") + "\r\n\r\n"
     return p
@@ -99,7 +104,7 @@ def main():
                 time.sleep(0.2)
 
         resp = b""
-        sock.settimeout(10)
+        sock.settimeout(15)
         while b"\r\n\r\n" not in resp:
             chunk = sock.recv(4096)
             if not chunk:

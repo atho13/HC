@@ -4,7 +4,7 @@ LOCK_FILE="/tmp/frdmxtunnel_ctrl.lock"
 cleanup_all() {
     killall -9 frdmxtunnel_watchdog zivpn qssh stunnel xray openvpn 2>/dev/null
     pkill -9 -f "frdmxtunnel_payload.py" 2>/dev/null
-    pkill -9 -f "sshpass.*1080" 2>/dev/null
+    killall -9 sshpass ssh 2>/dev/null; pkill -9 -f "sshpass.*108[0-9]" 2>/dev/null
     nft delete table inet frdmxtunnel 2>/dev/null
     rm -f /tmp/frdmxtunnel_pubip
 }

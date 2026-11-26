@@ -1,42 +1,69 @@
 #!/bin/sh
-# Beri jeda 12 detik di awal agar qssh / zivpn selesai handshake
-sleep 12
+sleep 30
 
 FAIL_COUNT=0
-CHECK_URL="http://gstatic.com"
 
 while true; do
-    sleep 15
+    sleep 30
 
-    # Skip pengecekan jika tunnel mati atau sedang proses switch/restart manual
     [ -f "/tmp/frdmxtunnel_ctrl.lock" ] && continue
     ENABLED=$(uci -q get frdmxtunnel.main.enabled)
     [ "$ENABLED" != "1" ] && continue
 
-    # Cek koneksi internet (timeout 6 detik agar aman untuk SlowDNS)
-    if curl -s -I -o /dev/null --max-time 10 "$CHECK_URL"; then
-        FAIL_COUNT=0
-    else
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Ping timeout ($FAIL_COUNT/3)..." >> /tmp/frdmxtunnel.log
+    CURR_IDX=$(cat /tmp/frdmxtunnel_active_idx 2>/dev/null || echo 1)
+    UCI_IDX=$((CURR_IDX - 1))
+    PROTO_NOW=$(uci -q get frdmxtunnel.@profile[$UCI_IDX].proto)
 
-        if [ "$FAIL_COUNT" -ge 3 ]; then
-            FAIL_COUNT=0
-            # Bersihkan cache RAM router agar tidak OOM saat restart core
-            sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-
-            TOTAL=$(uci show frdmxtunnel | grep -c "=profile$")
-            if [ "$TOTAL" -gt 1 ]; then
-                CURR=$(cat /tmp/frdmxtunnel_active_idx 2>/dev/null || echo 1)
-                NEXT=$((CURR + 1))
-                [ "$NEXT" -gt "$TOTAL" ] && NEXT=1
-                echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Koneksi terputus! Auto-failover ke Profil #$NEXT..." >> /tmp/frdmxtunnel.log
-                /usr/bin/frdmxtunnel_ctrl switch "$NEXT" >/dev/null 2>&1
-            else
-                echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Koneksi terputus! Auto-reconnect profil aktif..." >> /tmp/frdmxtunnel.log
-                /usr/bin/frdmxtunnel_ctrl restart >/dev/null 2>&1
-            fi
+    # 1. Cek jika proses inti benar-benar mati (langsung restart tanpa menunggu)
+    if [ "$PROTO_NOW" = "ovpn" ]; then
+        if ! pidof openvpn >/dev/null 2>&1; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] OpenVPN mati, menjalankan ulang..." >> /tmp/frdmxtunnel.log
+            /usr/bin/frdmxtunnel_ctrl restart >/dev/null 2>&1
             exit 0
         fi
+    else
+        if ! pidof xray >/dev/null 2>&1; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Xray core mati, menjalankan ulang..." >> /tmp/frdmxtunnel.log
+            /usr/bin/frdmxtunnel_ctrl restart >/dev/null 2>&1
+            exit 0
+        fi
+    fi
+
+    # 2. Cek koneksi dengan batas timeout longgar (15 detik) agar aman saat ping tinggi
+    CODE1=$(curl -s -o /dev/null -w "%{http_code}" -x socks5h://127.0.0.1:1080 --connect-timeout 15 --max-time 25 "http://cloudflare.com" 2>/dev/null)
+    if echo "$CODE1" | grep -Eq "^(200|204|301|302)$"; then
+        FAIL_COUNT=0
+        continue
+    fi
+
+    CODE2=$(curl -s -o /dev/null -w "%{http_code}" -x socks5h://127.0.0.1:1080 --connect-timeout 15 --max-time 25 "http://gstatic.com" 2>/dev/null)
+    if echo "$CODE2" | grep -Eq "^(200|204|301|302)$"; then
+        FAIL_COUNT=0
+        continue
+    fi
+
+    CODE3=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 15 --max-time 25 "http://apple.com" 2>/dev/null)
+    if echo "$CODE3" | grep -Eq "^(200|204|301|302)$"; then
+        FAIL_COUNT=0
+        continue
+    fi
+
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Respon lambat / timeout ($FAIL_COUNT/8)..." >> /tmp/frdmxtunnel.log
+
+    # Baru lakukan restart / failover setelah 8x gagal berturut-turut (~5 menit mati total)
+    if [ "$FAIL_COUNT" -ge 8 ]; then
+        FAIL_COUNT=0
+        TOTAL=$(uci show frdmxtunnel | grep -c "=profile$")
+        if [ "$TOTAL" -gt 1 ]; then
+            NEXT=$((CURR_IDX + 1))
+            [ "$NEXT" -gt "$TOTAL" ] && NEXT=1
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Auto-failover ke Profil #$NEXT..." >> /tmp/frdmxtunnel.log
+            /usr/bin/frdmxtunnel_ctrl switch "$NEXT" >/dev/null 2>&1
+        else
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Auto-reconnect profil aktif..." >> /tmp/frdmxtunnel.log
+            /usr/bin/frdmxtunnel_ctrl restart >/dev/null 2>&1
+        fi
+        exit 0
     fi
 done
