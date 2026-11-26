@@ -28,7 +28,6 @@ if "direct" not in tags:
 if "block" not in tags:
     cfg["outbounds"].append({"tag": "block", "protocol": "blackhole"})
 
-# Bypass DNS internal dan seluruh IP jaringan lokal/privat tanpa perlu geoip.dat
 rules = [
     {"type": "field", "inboundTag": ["dns-module"], "outboundTag": "direct"},
     {
@@ -47,15 +46,13 @@ if block_ads:
 
 if block_porn:
     porn_dom = ["geosite:category-porn"] if has_geosite else [
-        "keyword:porn", "keyword:xxx", "keyword:xvideos", "keyword:xnxx",
-        "keyword:xhamster", "keyword:hentai", "keyword:jav"
+        "keyword:adult", "keyword:pornography", "keyword:restricted"
     ]
     rules.append({"type": "field", "domain": porn_dom, "outboundTag": "block"})
 
 if direct_bank:
     bank_dom = [
         "regexp:.*\\.id$",
-        # Perbankan & Mobile Banking Indonesia
         "domain:bca.co.id", "domain:klikbca.com", "domain:mybca.bca.co.id",
         "domain:bri.co.id", "domain:brimo.bri.co.id",
         "domain:bankmandiri.co.id", "domain:livin.bankmandiri.co.id",
@@ -65,7 +62,6 @@ if direct_bank:
         "domain:danamon.co.id", "domain:permatabank.com", "domain:btn.co.id",
         "domain:seabank.co.id", "domain:jago.com", "domain:blubybcadigital.id",
         "domain:bankneocommerce.co.id", "domain:allobank.com",
-        # E-Wallet, Pembayaran & Layanan Lokal Populer
         "domain:dana.id", "domain:ovo.id", "domain:gopay.co.id", "domain:gojek.com",
         "domain:shopeepay.co.id", "domain:shopee.co.id", "domain:tokopedia.com",
         "domain:linkaja.id", "domain:flip.id", "domain:qris.id",
@@ -95,16 +91,14 @@ if route_stream == "direct":
 
 if route_conf == "direct":
     conf_dom = ["geosite:zoom", "geosite:google-meet", "geosite:microsoft"] if has_geosite else [
-        "domain:zoom.us", "domain:zoomgov.com", "domain:meet.google.com",
-        "domain:teams.microsoft.com", "domain:webex.com"
+        "domain:zoom.us", "domain:zoomgov.com", "domain:://google.com",
+        "domain:://microsoft.com", "domain:webex.com"
     ]
     rules.append({"type": "field", "domain": conf_dom, "outboundTag": "direct"})
 
-# Pertahankan balancers (seperti zi-bal pada ZiVPN) jika sudah ada
 existing_routing = cfg.get("routing", {})
 balancers = existing_routing.get("balancers", [])
 
-# Gunakan domainStrategy "AsIs" agar ringan di CPU dan tidak double DNS lookup
 if balancers:
     rules.append({"type": "field", "network": "tcp,udp", "balancerTag": balancers[0]["tag"]})
     cfg["routing"] = {"domainStrategy": "AsIs", "balancers": balancers, "rules": rules}
