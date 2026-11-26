@@ -3,7 +3,7 @@
 sleep 15
 
 FAIL_COUNT=0
-CHECK_URL="http://gstatic.com"
+CHECK_URL="http://bing.com"
 
 while true; do
     # Cek setiap 25 detik agar tidak membebani CPU/jaringan saat sibuk
