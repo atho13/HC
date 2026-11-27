@@ -34,7 +34,7 @@ XRAY_VER:=v26.3.27
 
 ZIVPN_BASE:=https://github.com/zahidbd2/udp-zivpn/releases/download/$(ZIVPN_VER)
 QSSH_BASE:=https://github.com/atho13/Q-SSH/releases/download/$(QSSH_VER)
-XRAY_BASE:=https://github.com
+XRAY_BASE:=https://github.com/XTLS/Xray-core/releases/download/$(XRAY_VER)
 
 define Package/luci-app-frdmxtunnel
   SECTION:=luci
