@@ -81,6 +81,12 @@ if route_game == "direct":
         "domain:hoyoverse.com", "domain:mihoyo.com"
     ]
     rules.append({"type": "field", "domain": game_dom, "outboundTag": "direct"})
+    # Tambahkan bypass port in-game (MLBB, PUBG, Free Fire, CODM, Genshin, dll)
+    rules.append({
+        "type": "field",
+        "port": "5000-5221,5224-5227,5229-5241,5243-5508,5551-5559,5601-5700,8001-8030,9000-9010,10000-10012,17500,20000-20002,30000-30300",
+        "outboundTag": "direct"
+    })
 
 if route_stream == "direct":
     stream_dom = ["geosite:youtube", "geosite:netflix", "geosite:tiktok", "geosite:disney", "geosite:spotify"] if has_geosite else [

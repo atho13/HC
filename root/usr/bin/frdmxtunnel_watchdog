@@ -1,7 +1,19 @@
 #!/bin/sh
-sleep 30
+sleep 35
 
 FAIL_COUNT=0
+RETRY_FILE="/tmp/frdmxtunnel_retry"
+
+check_conn() {
+    # Endpoint generate_204 ringan (0 byte body) agar hemat kuota & anti-timeout
+    for URL in "http://cloudflare.com" "http://gstatic.com" "http://msftconnecttest.com"; do
+        PROXY_ARG="-x socks5h://127.0.0.1:1080"; [ "$PROTO_NOW" = "ovpn" ] && PROXY_ARG=""; CODE=$(curl -s -I -o /dev/null -w "%{http_code}" $PROXY_ARG --connect-timeout 12 --max-time 20 "$URL" 2>/dev/null)
+        if echo "$CODE" | grep -Eq "^(200|204|301|302)$"; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 while true; do
     sleep 30
@@ -14,7 +26,7 @@ while true; do
     UCI_IDX=$((CURR_IDX - 1))
     PROTO_NOW=$(uci -q get frdmxtunnel.@profile[$UCI_IDX].proto)
 
-    # 1. Cek jika proses inti benar-benar mati (langsung restart tanpa menunggu)
+    # 1. Cek jika proses inti benar-benar mati (crash)
     if [ "$PROTO_NOW" = "ovpn" ]; then
         if ! pidof openvpn >/dev/null 2>&1; then
             echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] OpenVPN mati, menjalankan ulang..." >> /tmp/frdmxtunnel.log
@@ -29,41 +41,42 @@ while true; do
         fi
     fi
 
-    # 2. Cek koneksi dengan batas timeout longgar (15 detik) agar aman saat ping tinggi
-    CODE1=$(curl -s -o /dev/null -w "%{http_code}" -x socks5h://127.0.0.1:1080 --connect-timeout 15 --max-time 25 "http://cloudflare.com" 2>/dev/null)
-    if echo "$CODE1" | grep -Eq "^(200|204|301|302)$"; then
+    # 2. Cek responsivitas trafik melalui SOCKS5 lokal
+    if check_conn; then
+        if [ "$FAIL_COUNT" -gt 0 ] || [ -f "$RETRY_FILE" ]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Koneksi pulih kembali (delay ping normal)." >> /tmp/frdmxtunnel.log
+        fi
         FAIL_COUNT=0
-        continue
-    fi
-
-    CODE2=$(curl -s -o /dev/null -w "%{http_code}" -x socks5h://127.0.0.1:1080 --connect-timeout 15 --max-time 25 "http://gstatic.com" 2>/dev/null)
-    if echo "$CODE2" | grep -Eq "^(200|204|301|302)$"; then
-        FAIL_COUNT=0
-        continue
-    fi
-
-    CODE3=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 15 --max-time 25 "http://apple.com" 2>/dev/null)
-    if echo "$CODE3" | grep -Eq "^(200|204|301|302)$"; then
-        FAIL_COUNT=0
+        rm -f "$RETRY_FILE"
         continue
     fi
 
     FAIL_COUNT=$((FAIL_COUNT + 1))
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Respon lambat / timeout ($FAIL_COUNT/8)..." >> /tmp/frdmxtunnel.log
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Ping tinggi / timeout ($FAIL_COUNT/5)..." >> /tmp/frdmxtunnel.log
 
-    # Baru lakukan restart / failover setelah 8x gagal berturut-turut (~5 menit mati total)
-    if [ "$FAIL_COUNT" -ge 8 ]; then
+    # 3. Tahap Pemulihan: 1x refresh profil saat ini dulu, baru pindah akun cadangan
+    if [ "$FAIL_COUNT" -ge 5 ]; then
         FAIL_COUNT=0
         TOTAL=$(uci show frdmxtunnel | grep -c "=profile$")
-        if [ "$TOTAL" -gt 1 ]; then
+        RETRIED_IDX=$(cat "$RETRY_FILE" 2>/dev/null)
+
+        if [ "$RETRIED_IDX" != "$CURR_IDX" ]; then
+            echo "$CURR_IDX" > "$RETRY_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Refresh koneksi Profil #$CURR_IDX terlebih dahulu..." >> /tmp/frdmxtunnel.log
+            /usr/bin/frdmxtunnel_ctrl restart >/dev/null 2>&1
+            exit 0
+        elif [ "$TOTAL" -gt 1 ]; then
+            rm -f "$RETRY_FILE"
             NEXT=$((CURR_IDX + 1))
             [ "$NEXT" -gt "$TOTAL" ] && NEXT=1
-            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Auto-failover ke Profil #$NEXT..." >> /tmp/frdmxtunnel.log
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Profil #$CURR_IDX tetap gagal setelah refresh, auto-failover ke Profil #$NEXT..." >> /tmp/frdmxtunnel.log
             /usr/bin/frdmxtunnel_ctrl switch "$NEXT" >/dev/null 2>&1
+            exit 0
         else
+            rm -f "$RETRY_FILE"
             echo "$(date '+%Y-%m-%d %H:%M:%S') - [Watchdog] Auto-reconnect profil aktif..." >> /tmp/frdmxtunnel.log
             /usr/bin/frdmxtunnel_ctrl restart >/dev/null 2>&1
+            exit 0
         fi
-        exit 0
     fi
 done

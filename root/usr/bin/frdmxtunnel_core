@@ -44,6 +44,8 @@ config_get PAYLOAD "$TARGET_CFG" payload
 config_get SNI "$TARGET_CFG" sni
 config_get WS_HOST "$TARGET_CFG" ws_host
 config_get WS_PATH "$TARGET_CFG" path
+config_get PROXY_HOST "$TARGET_CFG" proxy_host
+config_get PROXY_PORT "$TARGET_CFG" proxy_port
 config_get NS_DOMAIN "$TARGET_CFG" ns_domain
 config_get PUBKEY "$TARGET_CFG" pubkey
 config_get DNS_RESOLVER "$TARGET_CFG" dns_resolver
@@ -86,10 +88,35 @@ resolve_ipv4() {
     nslookup "$host" 2>/dev/null | awk '/^Address [0-9]+: / {print $3}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1
 }
 
+PROXY_HOST=$(echo "$PROXY_HOST" | tr -d " \t\r\n")
+PROXY_PORT=$(echo "$PROXY_PORT" | tr -d " \t\r\n")
+case "$PROXY_HOST" in
+    *:*)
+        [ -z "$PROXY_PORT" ] && PROXY_PORT="${PROXY_HOST#*:}"
+        PROXY_HOST="${PROXY_HOST%%:*}"
+        ;;
+esac
+DIAL_HOST="${PROXY_HOST:-$SERVER}"
+DIAL_PORT="${PROXY_PORT:-$PORT}"
+[ -n "$PROXY_HOST" ] && [ -z "$PROXY_PORT" ] && DIAL_PORT="80"
+
+# Smart Auto-Fallback: Jika mode ssl/ssl_payload tapi target port bukan HTTPS (misal 80/8080), otomatis beralih ke HTTP polos agar tidak error SSL
+if [ "$PROTO" = "ssh" ]; then
+    case "$DIAL_PORT" in
+        443|8443|2053|2083|2087|2096) : ;;
+        *)
+            [ "$MODE" = "ssl_payload" ] && MODE="payload"
+            [ "$MODE" = "ssl" ] && MODE="direct"
+            ;;
+    esac
+fi
+
 SERVER_IP=$(resolve_ipv4 "$SERVER")
+PROXY_IP=$(resolve_ipv4 "$DIAL_HOST")
 RESOLVER_IP=$(resolve_ipv4 "$DNS_RESOLVER")
 BYPASS_RULE=""
 [ -n "$SERVER_IP" ] && BYPASS_RULE="${BYPASS_RULE}ip daddr $SERVER_IP return; "
+[ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$SERVER_IP" ] && BYPASS_RULE="${BYPASS_RULE}ip daddr $PROXY_IP return; "
 [ -n "$RESOLVER_IP" ] && BYPASS_RULE="${BYPASS_RULE}ip daddr $RESOLVER_IP return; "
 
 log "Starting Frdmx Tunnel Core (Profile #$ACTIVE_IDX)..."
@@ -176,26 +203,56 @@ QSSH_EOF
         sleep 3
         SSH_OUTBOUNDS='{ "tag": "ssh-1", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1081 }] }, "streamSettings": { "sockopt": { '"${IF_JSON}"'"mark": 255 } } }'
     else
-        for IDX in 1 2; do
+        touch /tmp/frdmxtunnel_ssh.run
+        printf '%s' "$PAYLOAD" > /tmp/frdmxtunnel_payload.txt
+        SSH_SESSIONS=$(uci -q get frdmxtunnel.main.ssh_sessions); [ "$SSH_SESSIONS" != "1" ] && SSH_SESSIONS="2"
+        SEQ_LIST="1 2"; [ "$SSH_SESSIONS" = "1" ] && SEQ_LIST="1"
+        for IDX in $SEQ_LIST; do
             LPORT=$((1080 + IDX))
             SPORT=$((8990 + IDX))
-            if [ "$MODE" = "payload" ]; then
-                printf '%s' "$PAYLOAD" > /tmp/frdmxtunnel_payload.txt
-                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '$SERVER' '$PORT' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI'" -N -D 0.0.0.0:$LPORT "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
-            elif [ "$MODE" = "ssl" ]; then
-                printf "foreground = yes\nclient = yes\nTIMEOUTclose = 0\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\nsocket = l:SO_KEEPALIVE=1\nsocket = r:SO_KEEPALIVE=1\n[ssh-tls-$IDX]\naccept = 127.0.0.1:$SPORT\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom_$IDX.conf
+            if [ "$MODE" = "ssl" ] || [ "$MODE" = "ssl_payload" ]; then
+                printf "foreground = yes
+client = yes
+TIMEOUTclose = 0
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+socket = l:SO_KEEPALIVE=1
+socket = r:SO_KEEPALIVE=1
+[ssh-tls-$IDX]
+accept = 127.0.0.1:$SPORT
+connect = %s:%s
+sni = %s
+" "$DIAL_HOST" "$DIAL_PORT" "$FINAL_SNI" > /tmp/stunnel_custom_$IDX.conf
                 stunnel /tmp/stunnel_custom_$IDX.conf >> "$LOG_FILE" 2>&1 &
                 sleep 1
-                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:$LPORT -p $SPORT "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1 &
-            elif [ "$MODE" = "ssl_payload" ]; then
-                printf "foreground = yes\nclient = yes\nTIMEOUTclose = 0\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\nsocket = l:SO_KEEPALIVE=1\nsocket = r:SO_KEEPALIVE=1\n[ssh-wss-$IDX]\naccept = 127.0.0.1:$SPORT\nconnect = %s:%s\nsni = %s\n" "$SERVER" "$PORT" "$FINAL_SNI" > /tmp/stunnel_custom_$IDX.conf
-                stunnel /tmp/stunnel_custom_$IDX.conf >> "$LOG_FILE" 2>&1 &
-                sleep 1
-                printf '%s' "$PAYLOAD" > /tmp/frdmxtunnel_payload.txt
-                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '127.0.0.1' '$SPORT' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI'" -N -D 0.0.0.0:$LPORT "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1 &
-            else
-                sshpass -p "$PASS" ssh $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:$LPORT -p "$PORT" "$USER@$SERVER" >> "$LOG_FILE" 2>&1 &
             fi
+            (
+                FAIL_TRY=0
+                while [ -f /tmp/frdmxtunnel_ssh.run ] && [ "$FAIL_TRY" -lt 5 ]; do
+                    FAIL_TRY=$((FAIL_TRY + 1))
+                    SSH_AUTH_CMD="sshpass -p \"$PASS\" ssh"
+                    [ -z "$PASS" ] && SSH_AUTH_CMD="ssh -o BatchMode=yes"
+                    SSH_AUTH_CMD="sshpass -p \"$PASS\" ssh"
+                    [ -z "$PASS" ] && SSH_AUTH_CMD="ssh -o BatchMode=yes"
+                    if [ "$MODE" = "payload" ] || [ "$MODE" = "proxy_ssl" ]; then
+                        REAL_HOST="$SERVER" REAL_PORT="$PORT" REAL_IP="$SERVER_IP" PROXY_HOST="${PROXY_HOST:-$WS_HOST}" PROXY_PORT="$DIAL_PORT" \
+                        $SSH_AUTH_CMD $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -o TCPKeepAlive=yes -o "RekeyLimit=1G 1h" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '$DIAL_HOST' '$DIAL_PORT' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI' '$MODE'" -N -D 0.0.0.0:$LPORT "$USER@$SERVER" >> "$LOG_FILE" 2>&1
+                    elif [ "$MODE" = "ssl" ]; then
+                        $SSH_AUTH_CMD $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -o TCPKeepAlive=yes -o "RekeyLimit=1G 1h" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:$LPORT -p $SPORT "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1
+                    elif [ "$MODE" = "ssl_payload" ]; then
+                        REAL_HOST="$SERVER" REAL_PORT="$PORT" REAL_IP="$SERVER_IP" PROXY_HOST="${PROXY_HOST:-$WS_HOST}" PROXY_PORT="$DIAL_PORT" \
+                        $SSH_AUTH_CMD $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -o TCPKeepAlive=yes -o "RekeyLimit=1G 1h" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ProxyCommand="python3 -u /usr/bin/frdmxtunnel_payload.py '127.0.0.1' '$SPORT' /tmp/frdmxtunnel_payload.txt '$FINAL_SNI' 'stunnel_payload'" -N -D 0.0.0.0:$LPORT "$USER@127.0.0.1" >> "$LOG_FILE" 2>&1
+                    else
+                        $SSH_AUTH_CMD $SSH_BIND -o Compression=no -c aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -o TCPKeepAlive=yes -o "RekeyLimit=1G 1h" -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -N -D 0.0.0.0:$LPORT -p "$PORT" "$USER@$SERVER" >> "$LOG_FILE" 2>&1
+                    fi
+                    [ -f /tmp/frdmxtunnel_ssh.run ] || break
+                    if tail -n 15 "$LOG_FILE" 2>/dev/null | grep -q "Permission denied"; then
+                        log "Auth gagal (Permission denied), menghentikan auto-reconnect agar IP tidak di-ban VPS."
+                        break
+                    fi
+                    sleep 5
+                done
+            ) &
         done
         sleep 3
         SSH_OUTBOUNDS='{ "tag": "ssh-1", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1081 }] }, "streamSettings": { "sockopt": { '"${IF_JSON}"'"mark": 255 } } },
@@ -228,7 +285,7 @@ QSSH_EOF
     { "tag": "dns-out", "protocol": "dns" }
   ],
   "routing": {
-    "balancers": [{ "tag": "ssh-bal", "selector": ["ssh-"], "strategy": { "type": "leastPing" }, "fallbackTag": "zi-1", "fallbackTag": "ssh-1" }],
+    "balancers": [{ "tag": "ssh-bal", "selector": ["ssh-"], "strategy": { "type": "leastPing" }, "fallbackTag": "ssh-1" }],
     "rules": [{ "type": "field", "network": "tcp,udp", "balancerTag": "ssh-bal" }]
   }
 }
@@ -239,6 +296,12 @@ XRAY_SSH_EOF
     config_get ROUTE_GAME main route_game proxy
     config_get ROUTE_STREAM main route_stream proxy
     config_get ROUTE_CONF main route_conf proxy
+    # Tangkap IP ESTABLISHED milik stunnel/ssh/qssh/python3 agar ter-bypass penuh di nftables (anti-loop)
+    ACTIVE_IPS=$(netstat -tnp 2>/dev/null | grep -i 'estab' | grep -E 'stunnel|ssh|qssh|python3' | awk '{print $5}' | grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' | sort -u | grep -vE '^(127\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)')
+    for aip in $ACTIVE_IPS; do
+        echo "$BYPASS_RULE" | grep -qw "$aip" || BYPASS_RULE="${BYPASS_RULE}ip daddr $aip return; "
+    done
+
     BLOCK_ADS="$BLOCK_ADS" BLOCK_PORN="$BLOCK_PORN" DIRECT_BANK="$DIRECT_BANK" ROUTE_GAME="$ROUTE_GAME" ROUTE_STREAM="$ROUTE_STREAM" ROUTE_CONF="$ROUTE_CONF" /usr/bin/frdmxtunnel_rules.py
     setup_firewall
     [ -f /root/frdmxtunnel/geosite.dat ] && export XRAY_LOCATION_ASSET=/root/frdmxtunnel; exec xray run -c /tmp/xray_custom.json >> "$LOG_FILE" 2>&1
@@ -297,12 +360,19 @@ XRAY_ZI_EOF
 elif [ "$PROTO" = "vless" ] || [ "$PROTO" = "vmess" ] || [ "$PROTO" = "trojan" ]; then
     SDNS_OUTBOUND=""
     PROXY_CHAIN=""
+    DIAL_XRAY_ADDR="$SERVER"
+    DIAL_XRAY_PORT="$PORT"
+
     if [ "$XRAY_MODE" = "slowdns" ]; then
-        QSSH_BIN=$(find_bin qssh)
-        [ -z "$QSSH_BIN" ] && { log "Error: Binary qssh tidak ditemukan"; exit 1; }
-        cat > /tmp/qssh_custom.json <<QSSH_XRAY_EOF
+        NETWORK="tcp"
+        TLS_SEC="none"
+        if [ -n "$SSH_USER" ]; then
+            # Mode 1: Via QSSH Bridge (Server SlowDNS mengarah ke SSH Port 22)
+            QSSH_BIN=$(find_bin qssh)
+            [ -z "$QSSH_BIN" ] && { log "Error: Binary qssh tidak ditemukan"; exit 1; }
+            cat > /tmp/qssh_custom.json <<QSSH_XRAY_EOF
 {
-  "ssh": { "host": "$SERVER", "ip": "127.0.0.1", "port": 22, "username": "${SSH_USER:-$USER}", "password": "${SSH_PASS:-$PASS}" },
+  "ssh": { "host": "$SERVER", "ip": "127.0.0.1", "port": 22, "username": "$SSH_USER", "password": "${SSH_PASS:-$PASS}" },
   "network": { "type": "dns" },
   "dns": { "nameserver": "$DNS_RESOLVER", "target_domain": "$NS_DOMAIN", "pubkey": "$PUBKEY", "query_type": "TXT" },
   "transport": { "tls": false, "host": "", "path": "/", "sni": "" },
@@ -311,23 +381,38 @@ elif [ "$PROTO" = "vless" ] || [ "$PROTO" = "vmess" ] || [ "$PROTO" = "trojan" ]
   "concurrency": { "workers": 2, "start_port": 1089 }
 }
 QSSH_XRAY_EOF
-        "$QSSH_BIN" --dial /tmp/qssh_custom.json >> "$LOG_FILE" 2>&1 &
-        sleep 3
-        SDNS_OUTBOUND='{ "tag": "sdns-bridge", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1089 }] }, "streamSettings": { "sockopt": { '"${IF_JSON}"'"mark": 255 } } },'
-        PROXY_CHAIN='"proxySettings": { "tag": "sdns-bridge" },'
-        NETWORK="tcp"
-        TLS_SEC="none"
+            "$QSSH_BIN" --dial /tmp/qssh_custom.json >> "$LOG_FILE" 2>&1 &
+            sleep 3
+            SDNS_OUTBOUND='{ "tag": "sdns-bridge", "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1089 }] }, "streamSettings": { "sockopt": { '"${IF_JSON}"'"mark": 255 } } },'
+            PROXY_CHAIN='"proxySettings": { "tag": "sdns-bridge" },'
+        else
+            # Mode 2: Direct DNSTT-Client (Server SlowDNS mengarah langsung ke port Xray tanpa SSH)
+            DNSTT_BIN=$(find_bin dnstt-client)
+            [ -z "$DNSTT_BIN" ] && { log "Error: Binary dnstt-client tidak ditemukan (isi SSH Username jika memakai QSSH)"; exit 1; }
+            "$DNSTT_BIN" -udp "$DNS_RESOLVER" -pubkey "$PUBKEY" "$NS_DOMAIN" 127.0.0.1:1089 >> "$LOG_FILE" 2>&1 &
+            sleep 2
+            DIAL_XRAY_ADDR="127.0.0.1"
+            DIAL_XRAY_PORT="1089"
+        fi
     fi
 
-    [ "$PROTO" = "vless" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"users\": [{\"id\": \"$PASS\", \"encryption\": \"none\"}] }]"
-    [ "$PROTO" = "vmess" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"users\": [{\"id\": \"$PASS\", \"alterId\": 0, \"security\": \"auto\"}] }]"
-    [ "$PROTO" = "trojan" ] && OUTBOUND_SETTINGS="\"servers\": [{ \"address\": \"$SERVER\", \"port\": $PORT, \"password\": \"$PASS\" }]"
+    [ "$PROTO" = "vless" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$DIAL_XRAY_ADDR\", \"port\": $DIAL_XRAY_PORT, \"users\": [{\"id\": \"$PASS\", \"encryption\": \"none\"}] }]"
+    [ "$PROTO" = "vmess" ] && OUTBOUND_SETTINGS="\"vnext\": [{ \"address\": \"$DIAL_XRAY_ADDR\", \"port\": $DIAL_XRAY_PORT, \"users\": [{\"id\": \"$PASS\", \"alterId\": 0, \"security\": \"auto\"}] }]"
+    [ "$PROTO" = "trojan" ] && OUTBOUND_SETTINGS="\"servers\": [{ \"address\": \"$DIAL_XRAY_ADDR\", \"port\": $DIAL_XRAY_PORT, \"password\": \"$PASS\" }]"
 
     [ "$TLS_SEC" = "tls" ] && TLS_BLOCK="\"tlsSettings\": { \"serverName\": \"$FINAL_SNI\", \"fingerprint\": \"chrome\", \"verifyPeerCertByName\": \"$SERVER,$FINAL_WS_HOST\" }," || TLS_BLOCK=""
     NET_BLOCK=""
     [ "$NETWORK" = "ws" ] && NET_BLOCK="\"wsSettings\": { \"path\": \"$WS_PATH\", \"host\": \"$FINAL_WS_HOST\", \"heartbeatPeriod\": 15 },"
     [ "$NETWORK" = "xhttp" ] && NET_BLOCK="\"xhttpSettings\": { \"path\": \"$WS_PATH\", \"host\": \"$FINAL_WS_HOST\", \"mode\": \"auto\" },"
-    [ "$MUX_EN" -eq 1 ] && MUX_BLOCK='"mux": { "enabled": true, "concurrency": 8, "xudpConcurrency": 8, "xudpProxyUDP443": "reject" }' || MUX_BLOCK='"mux": { "enabled": false }'
+        if [ "$MUX_EN" -eq 1 ]; then
+        if [ "$XRAY_MODE" = "slowdns" ]; then
+            MUX_BLOCK='"mux": { "enabled": true, "concurrency": 2, "xudpConcurrency": 2, "xudpProxyUDP443": "reject" }'
+        else
+            MUX_BLOCK='"mux": { "enabled": true, "concurrency": 8, "xudpConcurrency": 8, "xudpProxyUDP443": "reject" }'
+        fi
+    else
+        MUX_BLOCK='"mux": { "enabled": false }'
+    fi
 
     cat > /tmp/xray_custom.json <<XRAY_EOF
 {

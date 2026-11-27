@@ -6,7 +6,7 @@ cleanup_all() {
     pkill -9 -f "frdmxtunnel_payload.py" 2>/dev/null
     killall -9 sshpass ssh 2>/dev/null; pkill -9 -f "sshpass.*108[0-9]" 2>/dev/null
     nft delete table inet frdmxtunnel 2>/dev/null
-    rm -f /tmp/frdmxtunnel_pubip
+    rm -f /tmp/frdmxtunnel_pubip /tmp/frdmxtunnel_ssh.run /tmp/frdmxtunnel_retry
 }
 
 case "$1" in

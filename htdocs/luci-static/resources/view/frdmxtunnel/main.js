@@ -312,6 +312,153 @@ return view.extend({
 		s.anonymous = true;
 		s.addremove = true;
 
+                o = s.option(form.DummyValue, '_import_zivpn', _('Quick Import ZiVPN'));
+                o.depends('proto', 'zivpn');
+                o.rawhtml = true;
+                o.renderWidget = function(section_id) {
+                        var input = E('input', {
+                                'type': 'text',
+                                'class': 'cbi-input-text',
+                                'style': 'width:70%; margin-right:8px;',
+                                'placeholder': 'Tempel zivpn://password@host:6000-19999 atau host:port@password...'
+                        });
+                        var btn = E('button', {
+                                'type': 'button',
+                                'class': 'cbi-button cbi-button-apply',
+                                'click': function() {
+                                        var raw = (input.value || '').trim();
+                                        if (!raw) return alert('Silakan tempel akun ZiVPN terlebih dahulu!');
+                                        var clean = raw.replace(/^zivpn:\/\//i, '').split('#').trim();
+                                        var queryStr = '';
+                                        if (clean.indexOf('?') !== -1) {
+                                                var qParts = clean.split('?');
+                                                clean = qParts;
+                                                queryStr = qParts;
+                                        }
+                                        if (clean.indexOf('@') === -1) {
+                                                return alert('Format tidak valid! Gunakan host:port@password atau zivpn://password@host:port');
+                                        }
+                                        var parts = clean.split('@');
+                                        var left = parts, right = parts;
+                                        var host = '', portRange = '6000-19999', auth = '', obfs = '';
+
+                                        // Deteksi posisi host (mengandung titik domain/IP) vs auth/password
+                                        if (right.indexOf('.') !== -1) {
+                                                // Format: password@host:port_range
+                                                auth = left;
+                                                var hp = right.split(':');
+                                                host = hp || '';
+                                                if (hp) portRange = hp;
+                                        } else {
+                                                // Format: host:port_range@password
+                                                auth = right;
+                                                var hp = left.split(':');
+                                                host = hp || '';
+                                                if (hp) portRange = hp;
+                                        }
+
+                                        if (queryStr) {
+                                                var params = new URLSearchParams(queryStr);
+                                                if (params.get('obfs')) obfs = params.get('obfs');
+                                                if (params.get('port')) portRange = params.get('port');
+                                        }
+
+                                        if (!host || !auth) {
+                                                return alert('Gagal membaca Server Host atau Password/Auth ZiVPN!');
+                                        }
+
+                                        function setVal(optName, val) {
+                                                var el = document.querySelector('[id$=".' + section_id + '.' + optName + '"] select, [id$=".' + section_id + '.' + optName + '"] input, [name="cbid.frdmxtunnel.' + section_id + '.' + optName + '"]');
+                                                if (el) {
+                                                        el.value = val;
+                                                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                                                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                                                }
+                                        }
+
+                                        setVal('server', host);
+                                        setVal('port_range', portRange);
+                                        setVal('password', auth);
+                                        if (obfs) setVal('obfs', obfs);
+                                        input.value = '';
+                                        alert('Berhasil import akun ZiVPN (' + host + ':' + portRange + ')! Klik Save & Apply untuk menghubungkan.');
+                                }
+                        }, [_('Import')]);
+                        return E('div', { 'style': 'display:flex; align-items:center;' }, [input, btn]);
+                };
+
+                o = s.option(form.DummyValue, '_import_ssh', _('Quick Import SSH'));
+                o.depends('proto', 'ssh');
+                o.rawhtml = true;
+                o.renderWidget = function(section_id) {
+                        var input = E('input', {
+                                'type': 'text',
+                                'class': 'cbi-input-text',
+                                'style': 'width:70%; margin-right:8px;',
+                                'placeholder': 'Tempel host:port@user:pass atau user:pass@host:port...'
+                        });
+                        var btn = E('button', {
+                                'type': 'button',
+                                'class': 'cbi-button cbi-button-apply',
+                                'click': function() {
+                                        var raw = (input.value || '').trim().replace(/^ssh:\/\//i, '').split('#')[0].trim();
+                                        if (!raw || raw.indexOf('@') === -1) {
+                                                return alert('Format tidak valid! Gunakan host:port@user:pass atau user:pass@host:port');
+                                        }
+                                        var parts = raw.split('@');
+                                        var left = parts[0], right = parts[1];
+                                        var host = '', port = '443', user = '', pass = '';
+
+                                        // Deteksi otomatis apakah format host:port@user:pass atau user:pass@host:port
+                                        var leftHostMatch = left.match(/^([^:]+):(\d+)$/);
+                                        var rightHostMatch = right.match(/^([^:]+):(\d+)$/);
+
+                                        if (rightHostMatch) {
+                                                // Format: user:pass@host:port
+                                                host = rightHostMatch[1];
+                                                port = rightHostMatch[2];
+                                                var up = left.split(':');
+                                                user = up[0] || '';
+                                                pass = up.slice(1).join(':') || '';
+                                        } else if (leftHostMatch) {
+                                                // Format: host:port@user:pass
+                                                host = leftHostMatch[1];
+                                                port = leftHostMatch[2];
+                                                var up = right.split(':');
+                                                user = up[0] || '';
+                                                pass = up.slice(1).join(':') || '';
+                                        } else {
+                                                // Tanpa port eksplisit (misal host@user:pass)
+                                                host = left;
+                                                var up = right.split(':');
+                                                user = up[0] || '';
+                                                pass = up.slice(1).join(':') || '';
+                                        }
+
+                                        if (!host || !user) {
+                                                return alert('Gagal membaca host atau username SSH!');
+                                        }
+
+                                        function setVal(optName, val) {
+                                                var el = document.querySelector('[id$=".' + section_id + '.' + optName + '"] select, [id$=".' + section_id + '.' + optName + '"] input, [name="cbid.frdmxtunnel.' + section_id + '.' + optName + '"]');
+                                                if (el) {
+                                                        el.value = val;
+                                                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                                                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                                                }
+                                        }
+
+                                        setVal('server', host);
+                                        setVal('port', port);
+                                        setVal('username', user);
+                                        setVal('password', pass);
+                                        input.value = '';
+                                        alert('Berhasil import akun SSH (' + host + ':' + port + ')! Silakan atur Mode, SNI & Payload lalu klik Save & Apply.');
+                                }
+                        }, [_('Import')]);
+                        return E('div', { 'style': 'display:flex; align-items:center;' }, [input, btn]);
+                };
+
                 o = s.option(form.DummyValue, '_import_raw', _('Quick Import Account'));
                 o.depends('proto', 'vless'); o.depends('proto', 'vmess'); o.depends('proto', 'trojan');
                 o.rawhtml = true;
@@ -394,6 +541,9 @@ return view.extend({
                         return E('div', { 'style': 'display:flex; align-items:center;' }, [input, btn]);
                 };
 
+		o = s.option(form.Value, 'alias', _('Profile Name / Alias'), _('Opsional: Nama label akun agar mudah dikenali (contoh: SSH SG AwanData).'));
+		o.placeholder = 'Contoh: SSH Bug TikTok';
+
 		o = s.option(form.ListValue, 'proto', _('Protocol'));
 		o.value('ssh', 'SSH Tunnel');
 		o.value('vless', 'VLESS (Xray)');
@@ -405,9 +555,10 @@ return view.extend({
 
 		o = s.option(form.ListValue, 'mode', _('Connection Mode'));
 		o.value('direct', 'Direct');
-		o.value('payload', 'HTTP Payload Injector (HTTP WS)');
-		o.value('ssl', 'SSL/TLS (SNI)');
-		o.value('ssl_payload', 'SSL + Payload (Enhanced / WSS)');
+		o.value('payload', 'HTTP Payload Injector (Port 80 / HTTP WS)');
+		o.value('ssl', 'SSL/TLS Direct (Port 443 / SNI)');
+		o.value('ssl_payload', 'SSL + Payload (Port 443 / WSS / CDN)');
+		o.value('proxy_ssl', 'HTTP Proxy + SSL/SNI (Proxy dulu -> TLS)');
 		o.value('slowdns', 'SlowDNS (DNSTT / QSSH)');
 		o.default = 'payload';
 		o.depends('proto', 'ssh');
@@ -435,7 +586,7 @@ return view.extend({
                 });
                 o.placeholder = 'Auto (kosong) atau ketik manual...';
                 o.default = '';
-o = s.option(form.Value, 'port', _('Port'));
+o = s.option(form.Value, 'port', _('Port'), _('Otomatis menyesuaikan mode (443=TLS/SSL, 80=HTTP/Non-TLS, 22=SlowDNS), atau ketik manual.'));
 		o.default = '443';
 		o.depends('proto', 'ssh'); o.depends('proto', 'vless'); o.depends('proto', 'vmess'); o.depends('proto', 'trojan'); o.depends('proto', 'ovpn');
 
@@ -449,7 +600,8 @@ o = s.option(form.Value, 'port', _('Port'));
 		o = s.option(form.Value, 'password', _('Password / UUID / Auth'));
 		o.password = true;
 
-                o = s.option(form.Value, 'ssh_user', _('SlowDNS SSH Username'));
+                o = s.option(form.Value, 'ssh_user', _('SlowDNS SSH Username (Opsional)'), _('Isi jika server SlowDNS memakai jembatan SSH (QSSH). Kosongkan jika server SlowDNS langsung mengarah ke Xray (Direct DNSTT-Client).'));
+                o.placeholder = 'Kosongkan untuk Direct DNSTT, atau isi user SSH...';
                 o.depends({ proto: 'vless', xray_mode: 'slowdns' });
                 o.depends({ proto: 'vmess', xray_mode: 'slowdns' });
                 o.depends({ proto: 'trojan', xray_mode: 'slowdns' });
@@ -488,14 +640,77 @@ o = s.option(form.Value, 'port', _('Port'));
 		o.default = 'hu``hqb`c';
 		o.depends('proto', 'zivpn');
 
-		o = s.option(form.Value, 'payload', _('Payload'));
-                o.placeholder = 'WS: GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]  |  HTTP: CONNECT [host_port] HTTP/1.1[crlf]Host: [sni][crlf][crlf]';
+		o = s.option(form.DummyValue, '_payload_preset', _('Payload Templates'));
+                o.depends({ proto: 'ssh', mode: 'payload' });
+                o.depends({ proto: 'ssh', mode: 'ssl_payload' });
+		o.depends({ proto: 'ssh', mode: 'proxy_ssl' });
+                o.rawhtml = true;
+                o.renderWidget = function(section_id) {
+                        var templates = [
+                                {
+                                        label: 'WS Standard (CDN / Direct)',
+                                        val: 'GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf*2]'
+                                },
+                                {
+                                        label: 'WS + Bug Host (WSS)',
+                                        val: 'GET wss://[sni]/ HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf*2]'
+                                },
+                                {
+                                        label: 'HTTP Split (Anti-DPI)',
+                                        val: 'CONNECT [host_port] HTTP/1.1[crlf]Host: [sni][crlf*2][split]GET http://[sni]/ HTTP/1.1[crlf]Host: [sni][crlf]X-Online-Host: [sni][crlf]Connection: Keep-Alive[crlf*2]'
+                                },
+                                {
+                                        label: 'HTTP Delay Split',
+                                        val: 'GET http://[sni]/ HTTP/1.1[crlf]Host: [sni][crlf*2][delay_split]CONNECT [host_port] HTTP/1.1[crlf]Host: [host][crlf*2]'
+                                }
+                        ];
+
+                        var btns = templates.map(function(tpl) {
+                                return E('button', {
+                                        'type': 'button',
+                                        'class': 'cbi-button cbi-button-action',
+                                        'style': 'margin: 2px 6px 2px 0; font-size: 12px; padding: 4px 10px;',
+                                        'click': function(e) {
+                                                e.preventDefault();
+                                                var el = document.querySelector('[id$=".' + section_id + '.payload"] textarea, [id$=".' + section_id + '.payload"] input, [name="cbid.frdmxtunnel.' + section_id + '.payload"]');
+                                                if (el) {
+                                                        el.value = tpl.val;
+                                                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                                                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                                                }
+                                        }
+                                }, [tpl.label]);
+                        });
+
+                        return E('div', { 'style': 'display:flex; flex-wrap:wrap; align-items:center;' }, btns);
+                };
+
+                o = s.option(form.TextValue, 'payload', _('Payload'), _('Tag didukung: [host], [port], [host_port], [sni], [ip], [ws_key], [ua], [crlf], [crlf*2], [split], [delay_split]'));
+		o.rows = 3;
+		o.placeholder = 'GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf*2]';
 		o.depends({ proto: 'ssh', mode: 'payload' });
 		o.depends({ proto: 'ssh', mode: 'ssl_payload' });
+		o.depends({ proto: 'ssh', mode: 'proxy_ssl' });
+
+		o = s.option(form.Value, 'proxy_host', _('Remote Proxy / Bug IP (Opsional)'), _('Kosongkan jika langsung ke Server. Isi dengan Bug CDN (contoh: ://vidio.com / 104.18.x.x) atau Proxy Operator (10.1.89.130).'));
+		o.placeholder = 'Kosongkan atau isi Bug CDN / Proxy IP...';
+		o.depends({ proto: 'ssh', mode: 'payload' });
+		o.depends({ proto: 'ssh', mode: 'ssl' });
+		o.depends({ proto: 'ssh', mode: 'ssl_payload' });
+		o.depends({ proto: 'ssh', mode: 'proxy_ssl' });
+
+		o = s.option(form.Value, 'proxy_port', _('Remote Proxy Port'), _('Port untuk Remote Proxy / Bug CDN (contoh: 80 atau 443). Diabaikan jika Remote Proxy kosong.'));
+		o.placeholder = '80 atau 443';
+		o.datatype = 'port';
+		o.depends({ proto: 'ssh', mode: 'payload' });
+		o.depends({ proto: 'ssh', mode: 'ssl' });
+		o.depends({ proto: 'ssh', mode: 'ssl_payload' });
+		o.depends({ proto: 'ssh', mode: 'proxy_ssl' });
 
 		o = s.option(form.Value, 'sni', _('SNI / Server Name'));
-                o.placeholder = 'Contoh: ://tiktokv.com';
+                o.placeholder = 'Contoh: ://tiktokv.com (tanpa https://)';
 		o.depends({ proto: 'ssh', mode: 'payload' }); o.depends({ proto: 'ssh', mode: 'ssl' }); o.depends({ proto: 'ssh', mode: 'ssl_payload' });
+		o.depends({ proto: 'ssh', mode: 'proxy_ssl' });
 		o.depends({ proto: 'vless', xray_mode: 'ws_tls' }); o.depends({ proto: 'vless', xray_mode: 'tcp_tls' }); o.depends({ proto: 'vless', xray_mode: 'xhttp_tls' });
 		o.depends({ proto: 'vmess', xray_mode: 'ws_tls' }); o.depends({ proto: 'vmess', xray_mode: 'tcp_tls' }); o.depends({ proto: 'vmess', xray_mode: 'xhttp_tls' });
 		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'tcp_tls' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_tls' });
@@ -519,6 +734,25 @@ o = s.option(form.Value, 'port', _('Port'));
 		o.depends({ proto: 'trojan', xray_mode: 'ws_tls' }); o.depends({ proto: 'trojan', xray_mode: 'ws_none' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_tls' }); o.depends({ proto: 'trojan', xray_mode: 'xhttp_none' });
 
 		return m.render().then(function(mapEl) {
+			// Auto-sesuaikan Port saat user mengubah dropdown Connection Mode (SSH maupun Xray)
+			mapEl.addEventListener('change', function(e) {
+				var target = e.target;
+				if (!target || !target.name) return;
+				var m = target.name.match(/^cbid\.frdmxtunnel\.([^.]+)\.(mode|xray_mode)$/);
+				if (!m) return;
+				var secId = m[1], val = target.value;
+				var portEl = mapEl.querySelector('[name="cbid.frdmxtunnel.' + secId + '.port"]');
+				if (!portEl) return;
+				var currentPort = (portEl.value || '').trim();
+				// Hanya ubah otomatis jika port masih standar (443, 80, 22, atau kosong) agar tidak menimpa port custom hasil Quick Import
+				if (['', '443', '80', '22'].indexOf(currentPort) !== -1) {
+					if (val === 'slowdns') portEl.value = '22';
+					else if (val === 'payload' || val === 'ws_none' || val === 'xhttp_none') portEl.value = '80';
+					else if (val === 'ssl' || val === 'ssl_payload' || val === 'ws_tls' || val === 'xhttp_tls' || val === 'tcp_tls') portEl.value = '443';
+					portEl.dispatchEvent(new Event('change', { bubbles: true }));
+				}
+			});
+
 			var accView = E('div', { 'class': 'ft-card', 'style': 'display:none;' }, [mapEl]);
 			var tDash = E('button', { 'class': 'ft-tab active' }, _('Dashboard'));
 			var tAcc  = E('button', { 'class': 'ft-tab' }, _('Accounts & Settings'));
