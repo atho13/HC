@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-frdmxtunnel
-PKG_VERSION:=1.2.0
+PKG_VERSION:=1.3.0
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Frdmx-Wrt
@@ -102,6 +102,10 @@ define Package/luci-app-frdmxtunnel/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
 	rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/
+	/etc/init.d/stunnel stop >/dev/null 2>&1
+	/etc/init.d/stunnel disable >/dev/null 2>&1
+	/etc/init.d/openvpn stop >/dev/null 2>&1
+	/etc/init.d/openvpn disable >/dev/null 2>&1
 	/etc/init.d/frdmxtunnel enable >/dev/null 2>&1
 	/etc/init.d/rpcd restart >/dev/null 2>&1
 }
