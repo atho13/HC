@@ -40,8 +40,10 @@ rules = [
 
 if block_ads:
     ads_dom = ["geosite:category-ads-all"] if has_geosite else [
-        "domain:doubleclick.net", "domain:googlesyndication.com", "domain:googleadservices.com",
-        "domain:admob.com", "domain:applovin.com", "keyword:adservice", "keyword:analytics"
+        "domain:doubleclick.net", "domain:googlesyndication.com", "domain:googleadservices.com", "domain:google-analytics.com",
+        "domain:ads.youtube.com", "domain:youtube.cleverads.vn", "domain:ads.facebook.com", "domain:facebookads.com",
+        "domain:ads-twitter.com", "domain:s.youtube.com", "domain:pixel.facebook.com",
+        "domain:admob.com", "domain:applovin.com", "keyword:adservice", "keyword:adsystem", "keyword:analytics"
     ]
     rules.append({"type": "field", "domain": ads_dom, "outboundTag": "block"})
 
@@ -74,11 +76,18 @@ if direct_bank:
 
 if route_game == "direct":
     game_dom = ["geosite:category-games"] if has_geosite else [
-        "domain:mobilelegends.com", "domain:youngjoygame.com", "domain:moonton.com",
-        "domain:pubgmobile.com", "domain:proximabeta.com", "domain:tencent.com",
-        "domain:garena.com", "domain:freefiremobile.com", "domain:riotgames.com",
-        "domain:steampowered.com", "domain:roblox.com", "domain:supercell.com",
-        "domain:hoyoverse.com", "domain:mihoyo.com"
+        "domain:roblox.com", "domain:rbxcdn.com", "domain:roblox.net", "domain:rbxinfra.net",
+        "domain:mobilelegends.com", "domain:youngjoygame.com", "domain:moonton.com", "domain:mlbb.com",
+        "domain:honorofkings.com", "domain:levelinfinite.com", "domain:dota2.com",
+        "domain:pubgmobile.com", "domain:proximabeta.com", "domain:tencent.com", "domain:intlgame.com", "domain:igamecj.com",
+        "domain:garena.com", "domain:freefiremobile.com", "domain:garenanow.com",
+        "domain:riotgames.com", "domain:riotcdn.net", "domain:pvp.net",
+        "domain:zepetto.com", "domain:pointblank.id", "domain:activision.com", "domain:callofduty.com",
+        "domain:epicgames.com", "domain:fortnite.com", "domain:ea.com", "domain:respawn.com",
+        "domain:supercell.com", "domain:supercellid.com", "domain:supercellgames.com", "domain:clashofclans.com", "domain:clashroyale.com", "domain:brawlstars.com",
+        "domain:lilith.com", "domain:lilithgame.com", "domain:igg.com", "domain:lordsmobile.com", "domain:yostar.com",
+        "domain:steampowered.com", "domain:steamcommunity.com", "domain:steamstatic.com", "domain:steamcontent.com",
+        "domain:hoyoverse.com", "domain:mihoyo.com", "domain:blizzard.com", "domain:battle.net"
     ]
     rules.append({"type": "field", "domain": game_dom, "outboundTag": "direct"})
     # Tambahkan bypass port in-game (MLBB, PUBG, Free Fire, CODM, Genshin, dll)
