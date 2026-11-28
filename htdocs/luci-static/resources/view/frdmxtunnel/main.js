@@ -36,6 +36,14 @@ return view.extend({
 			.ft-tab { background: #ffffff; border: 1px solid #cbd5e1; color: #475569; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; transition: all .15s; }
 			.ft-tab.active { background: #0284c7; color: #ffffff; border-color: #0284c7; }
 			.ft-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 20px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.03); }
+			
+			.ft-meter-grid { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; text-align: center; }
+			.ft-mini-box { padding: 14px 22px !important; min-width: 135px; justify-self: center; }
+			@media (max-width: 640px) {
+				.ft-meter-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+				.ft-meter-main { grid-column: 1 / -1; order: -1; }
+				.ft-mini-box { padding: 10px 6px !important; }
+			}
 			.ft-grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 14px; }
 			.ft-stat-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; }
 			.ft-acc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 10px; }
@@ -115,8 +123,13 @@ return view.extend({
 		var elValTx   = E('div', { 'style': 'font-size:18px; font-weight:700; color:#0f172a;' }, '0 B');
 		var elValPing = E('div', { 'style': 'font-size:18px; font-weight:700; color:#0284c7;' }, '- ms');
 		var elValIp   = E('div', { 'style': 'font-size:16px; font-weight:700; color:#0f172a;' }, '-');
+		var elValCpu  = E('div', { 'style': 'font-size:20px; font-weight:800; color:#0284c7; margin:6px 0 2px;' }, '0%');
+		var elSubCpu  = E('div', { 'style': 'font-size:11px; color:#64748b;' }, 'System Load');
+		var elValTemp = E('div', { 'style': 'font-size:20px; font-weight:800; color:#16a34a; margin:6px 0 2px;' }, '- °C');
+		var elSubTemp = E('div', { 'style': 'font-size:11px; color:#64748b;' }, 'SoC Thermal');
+		var prevCpu   = null;
 		var elAccList = E('div', { 'class': 'ft-acc-grid' }, 'Loading accounts...');
-				var elFullLog = E('textarea', { 'class': 'cbi-input-textarea', 'style': 'width:100%; font-family:monospace; min-height:380px; background:#f8fafc; color:#1e293b;', 'readonly': 'readonly' }, 'Loading...');
+		var elFullLog = E('textarea', { 'class': 'cbi-input-textarea', 'style': 'width:100%; font-family:monospace; min-height:380px; background:#f8fafc; color:#1e293b;', 'readonly': 'readonly' }, 'Loading...');
 
 		var svgEl = E('div', { 'style': 'width:100%; max-width:320px; margin:6px auto 2px;' });
 		svgEl.innerHTML = '<svg viewBox="0 0 280 160" style="width:100%; height:165px; display:block;">' +
@@ -190,9 +203,21 @@ return view.extend({
 					E('div', { 'class': 'ft-stat-box' }, [ E('small', { 'style': 'color:#64748b;' }, 'Public IP'), elValIp ])
 				])
 			]),
-			E('div', { 'class': 'ft-card', 'style': 'text-align:center;' }, [
-				E('strong', { 'style': 'font-size:13px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;' }, _('Speed Meter (Mbps)')),
-				svgEl
+			E('div', { 'class': 'ft-card ft-meter-grid' }, [
+				E('div', { 'class': 'ft-stat-box ft-mini-box' }, [
+					E('strong', { 'style': 'font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;' }, _('CPU Usage')),
+					elValCpu,
+					elSubCpu
+				]),
+				E('div', { 'class': 'ft-meter-main' }, [
+					E('strong', { 'style': 'font-size:13px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;' }, _('Speed Meter (Mbps)')),
+					svgEl
+				]),
+				E('div', { 'class': 'ft-stat-box ft-mini-box' }, [
+					E('strong', { 'style': 'font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;' }, _('Temperature')),
+					elValTemp,
+					elSubTemp
+				])
 			]),
 			E('div', { 'class': 'ft-card' }, [
 				E('div', { 'style': 'display:flex; justify-content:space-between; align-items:center;' }, [
@@ -250,6 +275,15 @@ return view.extend({
 						rxHist.push(rxSpd); rxHist.shift();
 						txHist.push(txSpd); txHist.shift();
 						updateChart(rxSpd);
+
+						if (typeof st.cpu !== 'undefined') {
+							elValCpu.textContent = st.cpu + '%';
+							elValCpu.style.color = st.cpu < 50 ? '#16a34a' : (st.cpu < 70 ? '#eab308' : '#dc2626');
+						}
+						if (st.temp && st.temp > 0) {
+							elValTemp.textContent = Number(st.temp).toFixed(1) + ' °C';
+							elValTemp.style.color = st.temp < 50 ? '#16a34a' : (st.temp < 70 ? '#eab308' : '#dc2626');
+						}
 
 						if (st.profiles && st.profiles.length > 0) {
 							elAccList.innerHTML = '';
